@@ -27,3 +27,8 @@ input,textarea{width:100%;font:inherit;font-size:16px;padding:10px 12px;border:1
 .dia{font-weight:600;margin:14px 0 6px}.hoje{color:var(--destaque)}
 .pill{font-size:11px;padding:2px 8px;border-radius:99px;background:var(--interno);color:var(--suave);margin-left:6px}
 .conectar{max-width:420px;margin:40px auto}
+
+select{width:100%;font:inherit;font-size:16px;padding:10px 12px;border:1px solid var(--borda);border-radius:10px;background:var(--card);color:var(--texto);margin-bottom:8px}
+.filtros{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+[data-nota]{cursor:pointer}
+textarea{resize:vertical}

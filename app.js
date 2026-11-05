@@ -10,6 +10,9 @@ const dataBr = (iso) => (iso && iso.length >= 10 ? iso.slice(8, 10) + '/' + iso.
 const DIAS = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
 
 let conexao = null, foto = null, comandos = [], aba = 'hoje', contaAba = 'receber', busca = '', erroRede = '';
+// Notas: filtros, nota aberta no editor (id, 'nova' ou null), rascunho do que está sendo digitado e o que já foi pedido ao computador
+// mas ainda não aplicado (aparece na lista mesmo antes do computador aplicar).
+let buscaNota = '', catNota = '', cliNota = '', notaAberta = null, rascunho = null, overlay = { editadas: {}, novas: [], excluidas: [] };
 
 function guardar(obj) { try { localStorage.setItem(CHAVE, JSON.stringify(obj)); } catch (e) { /* modo privado */ } }
 function ler() { try { return JSON.parse(localStorage.getItem(CHAVE) || '{}'); } catch (e) { return {}; } }
@@ -53,7 +56,8 @@ async function atualizar(silencioso) {
   try {
     const d = await relay('GET', 'lite_snapshot', null, 'tenant=' + encodeURIComponent(conexao.t));
     foto = d.snapshot; comandos = d.comandos || []; erroRede = '';
-    guardar({ conexao, foto, comandos });
+    if (!comandos.some((c) => c.status === 'pendente' && /_nota$/.test(c.tipo))) overlay = { editadas: {}, novas: [], excluidas: [] };
+    guardar({ conexao, foto, comandos, overlay });
     if (!silencioso) toast('Atualizado');
   } catch (e) {
     erroRede = e.message === 'Failed to fetch' ? 'Sem internet — mostrando os últimos dados.' : e.message;
@@ -66,7 +70,8 @@ async function enviar(tipo, dados, msg) {
     await relay('POST', 'lite_comando', { tenant: conexao.t, tipo, dados });
     toast(msg || 'Enviado. O computador aplica quando o Dudoo Lite estiver aberto.');
     await atualizar(true);
-  } catch (e) { toast(e.message === 'Failed to fetch' ? 'Sem internet.' : e.message); }
+    return true;
+  } catch (e) { toast(e.message === 'Failed to fetch' ? 'Sem internet.' : e.message); return false; }
 }
 
 function pendente(tipo, id) { return comandos.some((c) => c.status === 'pendente' && c.tipo === tipo); }
@@ -79,6 +84,7 @@ function abasDisponiveis() {
   if (m.includes('agenda')) lista.push(['agenda', 'Agenda']);
   lista.push(['contas', 'Contas']);
   if (m.includes('comercial')) lista.push(['leads', 'Leads']);
+  if (m.includes('notas')) lista.push(['notas', 'Notas']);
   lista.push(['mais', 'Mais']);
   return lista;
 }
@@ -91,7 +97,7 @@ function desenhar() {
   $('#sub-topo').textContent = (foto.negocio ? foto.negocio + ' · ' : '') + 'atualizado ' + quando(foto.atualizado_em);
   const abas = abasDisponiveis(); if (!abas.some((a) => a[0] === aba)) aba = 'hoje';
   $('#abas').innerHTML = abas.map(([k, r]) => `<button data-aba="${k}" class="${k === aba ? 'on' : ''}">${r}</button>`).join('');
-  palco.innerHTML = ({ hoje: telaHoje, agenda: telaAgenda, contas: telaContas, leads: telaLeads, mais: telaMais })[aba]();
+  palco.innerHTML = ({ hoje: telaHoje, agenda: telaAgenda, contas: telaContas, leads: telaLeads, notas: telaNotas, mais: telaMais })[aba]();
   ligar();
 }
 
@@ -186,6 +192,72 @@ function telaMais() {
   <div class="acoes"><button class="b" id="desconectar">Desconectar este celular</button></div></div>`;
 }
 
+// -- notas -----------------------------------------------------------------
+
+function notasVisiveis() {
+  const ex = new Set(overlay.excluidas || []);
+  const base = (foto.notas || []).filter((n) => !ex.has(n.id)).map((n) => (overlay.editadas || {})[n.id] || n);
+  return (overlay.novas || []).concat(base).sort((a, b) => String(b.atualizado_em).localeCompare(String(a.atualizado_em)));
+}
+function tituloNota(t) { const l = String(t || '').split('\n').map((x) => x.trim()).find((x) => x); return (l || 'Nota sem título').slice(0, 80); }
+function previaNota(t) { const l = String(t || '').split('\n').map((x) => x.trim()).filter((x) => x); return l.slice(1).join(' ').slice(0, 120); }
+function nomeCliente(id) { const c = (foto.clientes || []).find((x) => x.id === id); return c ? c.nome : ''; }
+
+function telaNotas() {
+  if (notaAberta) return editorNota();
+  const q = buscaNota.toLowerCase();
+  const todas = notasVisiveis(), cats = (foto.categorias_notas || []).slice();
+  todas.forEach((n) => { if (n.categoria && !cats.includes(n.categoria)) cats.push(n.categoria); });
+  const lista = todas.filter((n) => (!catNota || n.categoria === catNota) && (cliNota === '' || (cliNota === '__solta' ? !n.cliente_id : n.cliente_id === cliNota)) &&
+    (!q || (n.conteudo + ' ' + n.categoria).toLowerCase().includes(q)));
+  const grupos = []; const idx = {};
+  lista.forEach((n) => { const k = n.cliente_id || ''; if (!(k in idx)) { idx[k] = grupos.length; grupos.push({ k, itens: [] }); } grupos[idx[k]].itens.push(n); });
+  return `<input id="busca-nota" placeholder="Buscar nas notas" value="${esc(buscaNota)}">
+  <div class="filtros"><select id="cat-nota"><option value="">Todas as categorias</option>${cats.map((c) => `<option ${c === catNota ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>
+  <select id="cli-nota"><option value="">Todos os clientes</option><option value="__solta" ${cliNota === '__solta' ? 'selected' : ''}>Só notas soltas</option>${(foto.clientes || []).map((c) => `<option value="${esc(c.id)}" ${c.id === cliNota ? 'selected' : ''}>${esc(c.nome)}</option>`).join('')}</select></div>
+  <div class="acoes"><button class="b p" id="nova-nota">+ Nova nota</button></div>
+  ${grupos.length ? grupos.map((g) => `<h2>${esc(g.k ? nomeCliente(g.k) || 'Cliente' : 'Notas soltas')} (${g.itens.length})</h2>` + g.itens.map((n) => `<div class="card" data-nota="${esc(n.id)}">
+    <div class="t">${esc(tituloNota(n.conteudo))}<span class="pill">${esc(n.categoria)}</span></div>${previaNota(n.conteudo) ? `<div class="m">${esc(previaNota(n.conteudo))}</div>` : ''}
+    <div class="m">${esc(quando(n.atualizado_em))}${n.longa ? ' · só leitura (nota longa)' : ''}</div></div>`).join('')).join('') : '<div class="vazio">Nenhuma nota.</div>'}`;
+}
+
+function editorNota() {
+  const nova = notaAberta === 'nova', n = nova ? null : notasVisiveis().find((x) => x.id === notaAberta);
+  if (!nova && !n) { notaAberta = null; return telaNotas(); }
+  const r = rascunho || { conteudo: n ? n.conteudo : '', categoria: n ? n.categoria : 'Geral', cliente_id: n ? n.cliente_id : (cliNota && cliNota !== '__solta' ? cliNota : '') };
+  const cats = (foto.categorias_notas || ['Geral']).slice(); if (r.categoria && !cats.includes(r.categoria)) cats.push(r.categoria);
+  const leitura = !!(n && n.longa);
+  return `<h2>${nova ? 'Nova nota' : 'Editar nota'}</h2>
+  ${leitura ? '<div class="m">Nota longa: no celular só dá pra ler. Edite no computador.</div>' : ''}
+  <textarea id="nota-texto" rows="12" ${leitura ? 'readonly' : ''} placeholder="Escreva aqui">${esc(r.conteudo)}</textarea>
+  <input id="nota-cat" list="lista-cats" placeholder="Categoria" value="${esc(r.categoria)}"><datalist id="lista-cats">${cats.map((c) => `<option value="${esc(c)}">`).join('')}</datalist>
+  <select id="nota-cli"><option value="">Sem cliente (nota solta)</option>${(foto.clientes || []).map((c) => `<option value="${esc(c.id)}" ${c.id === r.cliente_id ? 'selected' : ''}>${esc(c.nome)}</option>`).join('')}</select>
+  <div class="acoes">${leitura ? '' : '<button class="b p" id="nota-salvar">Salvar</button>'}<button class="b" id="nota-voltar">Voltar</button>${nova ? '' : '<button class="b" id="nota-excluir">Excluir</button>'}</div>`;
+}
+
+function guardarRascunho() {
+  const t = $('#nota-texto'); if (!t) return;
+  rascunho = { conteudo: t.value, categoria: $('#nota-cat').value, cliente_id: $('#nota-cli').value };
+}
+function fecharNota() { notaAberta = null; rascunho = null; desenhar(); }
+
+async function salvarNota() {
+  guardarRascunho(); const r = rascunho, texto = r.conteudo.trim(), cat = (r.categoria || '').trim() || 'Geral';
+  if (!texto) { toast('A nota está vazia.'); return; }
+  const agora = new Date().toISOString(), antes = JSON.stringify(overlay);
+  let tipo, dados;
+  if (notaAberta === 'nova') {
+    overlay.novas = (overlay.novas || []).concat([{ id: 'novo-' + Date.now(), conteudo: texto, categoria: cat, cliente_id: r.cliente_id, atualizado_em: agora }]);
+    tipo = 'criar_nota'; dados = { conteudo: texto, categoria: cat, cliente_id: r.cliente_id };
+  } else {
+    const n = notasVisiveis().find((x) => x.id === notaAberta), base = ((foto.notas || []).find((x) => x.id === notaAberta) || n || {}).atualizado_em || '';
+    overlay.editadas = Object.assign({}, overlay.editadas, { [notaAberta]: Object.assign({}, n, { conteudo: texto, categoria: cat, cliente_id: r.cliente_id, atualizado_em: agora }) });
+    tipo = 'editar_nota'; dados = { id: notaAberta, conteudo: texto, categoria: cat, cliente_id: r.cliente_id, base };
+  }
+  guardar({ conexao, foto, comandos, overlay }); fecharNota();
+  if (!(await enviar(tipo, dados))) { overlay = JSON.parse(antes); guardar({ conexao, foto, comandos, overlay }); desenhar(); }   // sem internet: a nota some da lista e o aviso já foi dado
+}
+
 // -- eventos --------------------------------------------------------------
 
 function formulario(titulo, campos, ao_enviar) {
@@ -205,6 +277,19 @@ function ligar() {
   const nt = $('#nova-tarefa'); if (nt) nt.onclick = () => formulario('Nova tarefa', [{ id: 'titulo', rotulo: 'O que precisa ser feito' }, { id: 'prazo', rotulo: 'Prazo', tipo: 'date' }], (v) => v.titulo && enviar('criar_tarefa', v));
   const nc = $('#nova-conta'); if (nc) nc.onclick = () => formulario('Nova conta a receber', [{ id: 'descricao', rotulo: 'Descrição' }, { id: 'valor', rotulo: 'Valor (ex.: 150,00)', modo: 'decimal' }, { id: 'vencimento', rotulo: 'Vencimento', tipo: 'date' }], (v) => v.descricao && v.valor && v.vencimento && enviar('criar_conta_receber', v));
   const bu = $('#busca'); if (bu) bu.oninput = () => { busca = bu.value; const pos = bu.selectionStart; desenhar(); const n = $('#busca'); n.focus(); n.setSelectionRange(pos, pos); };
+  const bn = $('#busca-nota'); if (bn) bn.oninput = () => { buscaNota = bn.value; const pos = bn.selectionStart; desenhar(); const n = $('#busca-nota'); n.focus(); n.setSelectionRange(pos, pos); };
+  const cn = $('#cat-nota'); if (cn) cn.onchange = () => { catNota = cn.value; desenhar(); };
+  const ln = $('#cli-nota'); if (ln) ln.onchange = () => { cliNota = ln.value; desenhar(); };
+  const nn = $('#nova-nota'); if (nn) nn.onclick = () => { notaAberta = 'nova'; rascunho = null; desenhar(); };
+  document.querySelectorAll('[data-nota]').forEach((c) => { c.onclick = () => { notaAberta = c.dataset.nota; rascunho = null; desenhar(); window.scrollTo(0, 0); }; });
+  ['#nota-texto', '#nota-cat', '#nota-cli'].forEach((id) => { const e = $(id); if (e) { e.oninput = guardarRascunho; e.onchange = guardarRascunho; } });
+  const ns = $('#nota-salvar'); if (ns) ns.onclick = salvarNota;
+  const nv = $('#nota-voltar'); if (nv) nv.onclick = fecharNota;
+  const ne = $('#nota-excluir'); if (ne) ne.onclick = () => {
+    if (!confirm('Excluir esta nota?')) return;
+    overlay.excluidas = (overlay.excluidas || []).concat([notaAberta]); enviar('excluir_nota', { id: notaAberta }, 'Pedido de exclusão enviado.');
+    guardar({ conexao, foto, comandos, overlay }); fecharNota();
+  };
   const dc = $('#desconectar'); if (dc) dc.onclick = () => { guardar({}); conexao = foto = null; desenhar(); };
 }
 
@@ -215,7 +300,7 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('service-work
 
 (function iniciar() {
   const salvo = ler();
-  if (salvo.conexao) { conexao = salvo.conexao; foto = salvo.foto || null; comandos = salvo.comandos || []; }
+  if (salvo.conexao) { conexao = salvo.conexao; foto = salvo.foto || null; comandos = salvo.comandos || []; overlay = salvo.overlay || overlay; }
   if (lerLinkDaUrl()) { foto = null; comandos = []; }
   desenhar();
   atualizar(true);
