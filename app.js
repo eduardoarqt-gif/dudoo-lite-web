@@ -15,7 +15,7 @@ let conexao = null, foto = null, comandos = [], aba = 'hoje', busca = '', erroRe
 const CHAVE_FILA = 'dudoo-lite-web-fila';
 let fila = lerChave(CHAVE_FILA) || [];
 // Cadastros: busca e ficha aberta.
-let buscaCad = '', cadAberto = null;
+let buscaCad = '', cadAberto = null, consAberta = null;
 let finEscopo = 'empresa', finMes = '', contaAba = 'receber', pessoalLiberado = false, itensAbertos = {}, baixasLocais = {};
 // Notas: filtros, nota aberta no editor (id, 'nova' ou null), rascunho do que está sendo digitado e o que já foi pedido ao computador
 // mas ainda não aplicado (aparece na lista mesmo antes do computador aplicar).
@@ -351,11 +351,24 @@ function telaCadastros() {
   ${lista.length > 60 ? `<div class="vazio">Mostrando 60 de ${lista.length}. Use a busca para achar os outros.</div>` : ''}`;
 }
 
+function consultaDetalhe(c, a) {
+  const k = a.clinico, termos = foto.termos || {};
+  const bloco = (titulo, corpo) => `<div class="card"><div class="m">${esc(titulo)}</div><div class="t" style="white-space:pre-wrap;font-weight:400">${corpo}</div></div>`;
+  return `<div class="acoes"><button class="b" id="cons-voltar">‹ ${esc(c.nome)}</button></div>
+  <h2>${esc(a.servico || termos.atendimento || 'Atendimento')}</h2><div class="m">${dataLonga(a.data)}${a.hora ? ' às ' + esc(a.hora) : ''}</div>
+  ${k.obs ? bloco('Observações', esc(k.obs)) : ''}
+  ${k.campos.map(([r, t]) => bloco(r, esc(t))).join('')}
+  ${k.listas.map(([r, l]) => bloco(r, l.map((x) => '• ' + esc(x)).join('\n'))).join('')}
+  ${k.medidas.length ? bloco('Medidas', k.medidas.map(([r, v]) => esc(r) + ': ' + esc(v)).join('\n')) : ''}
+  <div class="m" style="margin-top:8px">Somente leitura. Texto resumido; o registro completo, as fotos e os documentos ficam no computador.</div>`;
+}
+
 function fichaCliente(c) {
+  if (consAberta) { const a = c.ficha && c.ficha.atendimentos.find((x) => x.id === consAberta && x.clinico); if (a) return consultaDetalhe(c, a); consAberta = null; }
   const termos = foto.termos || {}, f = c.ficha, zap = foneLink(c.telefone), tel = String(c.telefone || '').replace(/\D/g, '');
   const linha = (r, v) => (v ? `<div class="linha"><div class="m">${r}</div><div class="t" style="text-align:right">${esc(v)}</div></div>` : '');
   const proximos = (foto.agenda || []).filter((e) => e.cliente_id === c.id && e.data >= foto.hoje);
-  const atendimentos = f ? (f.atendimentos.length ? f.atendimentos.map((a) => `<div class="linha"><div><div class="t">${esc(a.servico || 'Atendimento')}</div><div class="m">${dataLonga(a.data)}${a.hora ? ' às ' + esc(a.hora) : ''}</div></div></div>`).join('<hr>') : '<div class="vazio">Nenhum atendimento lançado.</div>')
+  const atendimentos = f ? (f.atendimentos.length ? f.atendimentos.map((a) => `<div class="linha"${a.clinico ? ` data-cons="${esc(a.id)}" style="cursor:pointer"` : ''}><div><div class="t">${esc(a.servico || 'Atendimento')}</div><div class="m">${dataLonga(a.data)}${a.hora ? ' às ' + esc(a.hora) : ''}${a.clinico ? ' · ver registro' : ''}</div></div>${a.clinico ? '<div class="m">›</div>' : ''}</div>`).join('<hr>') : '<div class="vazio">Nenhum atendimento lançado.</div>')
     : '<div class="vazio">O histórico deste cadastro está no computador (o celular guarda o dos mais recentes).</div>';
   return `<div class="acoes"><button class="b" id="cad-voltar">‹ ${esc(termos.cliente || 'Cadastros')}</button></div>
   <h2>${esc(c.nome)}${c.status && c.status !== 'Ativo' ? `<span class="pill">${esc(c.status)}</span>` : ''}</h2>
@@ -364,7 +377,7 @@ function fichaCliente(c) {
   ${proximos.length ? `<h2>Próximos agendamentos</h2>${proximos.map((e) => `<div class="card"><div class="linha"><div class="t">${esc(e.titulo)}</div><div class="m">${dataBr(e.data)} ${esc(e.hora)}</div></div></div>`).join('')}` : ''}
   ${f && f.pacotes.length ? `<h2>Pacotes</h2>${f.pacotes.map((p) => `<div class="card"><div class="linha"><div class="t">${esc(p.nome)}</div><div class="m">${p.usadas} de ${p.total} sessões${p.status === 'concluido' ? ' · concluído' : ''}</div></div></div>`).join('')}` : ''}
   <h2>${esc(termos.atendimento || 'Atendimentos')} recentes${f && f.total > f.atendimentos.length ? ` (${f.atendimentos.length} de ${f.total})` : ''}</h2><div class="card">${atendimentos}</div>
-  <div class="m" style="margin-top:8px">Só dados de cadastro e histórico. Anamnese, evolução, alergias, documentos e fotos ficam só no computador.</div>`;
+  <div class="m" style="margin-top:8px">${f && f.atendimentos.some((a) => a.clinico) ? 'Toque numa consulta para ver o que foi registrado. Anamnese, alergias, documentos e fotos ficam só no computador.' : 'Só dados de cadastro e histórico. O registro das consultas fica no computador (dá para liberar nas Configurações do Dudoo Lite).'}</div>`;
 }
 
 // -- notas -----------------------------------------------------------------
@@ -457,8 +470,10 @@ function ligar() {
   const nt = $('#nova-tarefa'); if (nt) nt.onclick = () => formulario('Nova tarefa', [{ id: 'titulo', rotulo: 'O que precisa ser feito' }, { id: 'prazo', rotulo: 'Prazo', tipo: 'date' }], (v) => v.titulo && enviar('criar_tarefa', v));
   const nc = $('#nova-conta'); if (nc) nc.onclick = novaConta;
   const bc = $('#busca-cad'); if (bc) bc.oninput = () => { buscaCad = bc.value; const pos = bc.selectionStart; desenhar(); const n = $('#busca-cad'); n.focus(); n.setSelectionRange(pos, pos); };
-  document.querySelectorAll('[data-cad]').forEach((c) => { c.onclick = () => { cadAberto = c.dataset.cad; desenhar(); window.scrollTo(0, 0); }; });
-  const cv = $('#cad-voltar'); if (cv) cv.onclick = () => { cadAberto = null; desenhar(); };
+  document.querySelectorAll('[data-cad]').forEach((c) => { c.onclick = () => { cadAberto = c.dataset.cad; consAberta = null; desenhar(); window.scrollTo(0, 0); }; });
+  const cv = $('#cad-voltar'); if (cv) cv.onclick = () => { cadAberto = null; consAberta = null; desenhar(); };
+  document.querySelectorAll('[data-cons]').forEach((l) => { l.onclick = () => { consAberta = l.dataset.cons; desenhar(); window.scrollTo(0, 0); }; });
+  const kv = $('#cons-voltar'); if (kv) kv.onclick = () => { consAberta = null; desenhar(); };
   const bn = $('#busca-nota'); if (bn) bn.oninput = () => { buscaNota = bn.value; const pos = bn.selectionStart; desenhar(); const n = $('#busca-nota'); n.focus(); n.setSelectionRange(pos, pos); };
   const cn = $('#cat-nota'); if (cn) cn.onchange = () => { catNota = cn.value; desenhar(); };
   const ln = $('#cli-nota'); if (ln) ln.onchange = () => { cliNota = ln.value; desenhar(); };
