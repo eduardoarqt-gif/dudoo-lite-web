@@ -32,3 +32,9 @@ select{width:100%;font:inherit;font-size:16px;padding:10px 12px;border:1px solid
 .filtros{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 [data-nota]{cursor:pointer}
 textarea{resize:vertical}
+.kpis{display:grid;grid-template-columns:1fr 1fr;gap:8px}.kpis .card{margin-bottom:8px}
+.mes{display:flex;justify-content:space-between;align-items:center;gap:10px;margin:6px 0 10px}.mes b{font-weight:600}.mes button{min-width:44px}
+.card.fechada{opacity:.75}
+hr{border:0;border-top:1px solid var(--borda);margin:8px 0}
+[data-cad]{cursor:pointer}
+.abas button{font-size:12px;padding:10px 0}
