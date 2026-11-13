@@ -105,9 +105,8 @@ function abasDisponiveis() {
   const m = (foto && foto.modulos) || [];
   const lista = [['hoje', 'Hoje']];
   if (m.includes('agenda')) lista.push(['agenda', 'Agenda']);
-  lista.push(['contas', 'Contas']);
+  lista.push(['contas', 'Financeiro']);
   if (m.includes('cadastros')) lista.push(['cadastros', ((foto.termos && foto.termos.cliente) || 'Cadastros')]);
-  if (m.includes('comercial')) lista.push(['leads', 'Leads']);
   if (m.includes('notas')) lista.push(['notas', 'Notas']);
   lista.push(['mais', 'Mais']);
   return lista;
@@ -118,9 +117,10 @@ function desenhar() {
   $('#aviso').hidden = !erroRede; $('#aviso').textContent = erroRede;
   if (!conexao) { $('#abas').innerHTML = ''; return telaConectar(palco); }
   if (!foto) { $('#sub-topo').textContent = 'Conectando…'; palco.innerHTML = '<p class="vazio">Buscando os dados do computador…</p>'; return; }
+  if (foto.modo === 'atendente') return desenharAtendente();
   $('#sub-topo').textContent = (foto.negocio ? foto.negocio + ' · ' : '') + 'atualizado ' + quando(foto.atualizado_em);
   const abas = abasDisponiveis(); if (!abas.some((a) => a[0] === aba)) aba = 'hoje';
-  $('#abas').innerHTML = abas.map(([k, r]) => `<button data-aba="${k}" class="${k === aba ? 'on' : ''}">${r}</button>`).join('');
+  $('#abas').innerHTML = abas.map(([k, r]) => `<button data-aba="${k}" class="${k === aba || (k === 'mais' && aba === 'leads') ? 'on' : ''}">${r}</button>`).join('');
   palco.innerHTML = ({ hoje: telaHoje, agenda: telaAgenda, contas: telaContas, cadastros: telaCadastros, leads: telaLeads, notas: telaNotas, mais: telaMais })[aba]();
   ligar();
 }
@@ -229,7 +229,7 @@ function telaContas() {
   const meses = F.meses, mes = meses.includes(finMes) ? finMes : (meses.includes(F.mes_atual) ? F.mes_atual : meses[0]);
   finMes = mes;
   const escopoSeg = temPessoal ? `<div class="seg"><button class="b ${finEscopo === 'empresa' ? 'p' : ''}" data-escopo="empresa">${esc(foto.negocio || 'Empresa')}</button><button class="b ${finEscopo === 'pessoal' ? 'p' : ''}" data-escopo="pessoal">Pessoal</button></div>` : '';
-  if (finEscopo === 'pessoal' && !pessoalLiberado) return `<h2>Contas</h2>${escopoSeg}${bloqueioPessoal()}`;
+  if (finEscopo === 'pessoal' && !pessoalLiberado) return `<h2>Financeiro</h2>${escopoSeg}${bloqueioPessoal()}`;
   const por = F[finEscopo].por_mes, dm = por[mes] || { a_receber: [], a_pagar: [] }, idx = meses.indexOf(mes);
   const soma = (l, f) => l.filter(f).reduce((t, x) => t + x.valor, 0);
   const aberta = (x) => !fechadaAgora(x), feita = (x) => fechadaAgora(x);
@@ -246,7 +246,7 @@ function telaContas() {
     corpo = (lista.length ? lista.map((i) => cartaoConta(i, receber, finEscopo)).join('') : `<div class="vazio">Nada em ${esc(rotuloMes(mes))}.</div>`) +
       `<div class="acoes"><button class="b" id="nova-conta">+ Nova conta a ${receber ? 'receber' : 'pagar'}</button></div>`;
   }
-  return `<h2>Contas</h2>${escopoSeg}
+  return `<h2>Financeiro</h2>${escopoSeg}
   <div class="mes"><button class="b" data-mes="-1" ${idx <= 0 ? 'disabled' : ''} aria-label="Mês anterior">‹</button>
     <div><b>${esc(rotuloMes(mes))}</b>${mes === F.mes_atual ? '<span class="m"> · mês atual</span>' : ''}</div>
     <button class="b" data-mes="1" ${idx >= meses.length - 1 ? 'disabled' : ''} aria-label="Próximo mês">›</button></div>
@@ -322,13 +322,16 @@ function cartaoLead(l, extra) {
 }
 function telaLeads() {
   const L = foto.leads || { followups_hoje: [], novos_sem_contato: [], sem_movimentacao: [] };
+  const voltar = '<div class="acoes"><button class="b" data-aba="mais">‹ Mais</button></div>';
   const bloco = (t, l, extra) => `<h2>${t} (${l.length})</h2>${l.length ? l.map((x) => cartaoLead(x, extra)).join('') : '<div class="vazio">Nenhum.</div>'}`;
-  return bloco('Follow-up hoje', L.followups_hoje, false) + bloco('Novos sem contato', L.novos_sem_contato, true) + bloco('Parados', L.sem_movimentacao, true);
+  return voltar + bloco('Follow-up hoje', L.followups_hoje, false) + bloco('Novos sem contato', L.novos_sem_contato, true) + bloco('Parados', L.sem_movimentacao, true);
 }
 
 function telaMais() {
   const ped = comandos.slice().reverse().slice(0, 8);
-  return `<h2>Pedidos enviados ao computador</h2>${ped.length ? ped.map((c) => `<div class="card"><div class="linha"><div class="t">${esc(c.tipo.replace(/_/g, ' '))}</div><div class="m ${c.status === 'erro' ? 'vencido' : c.status === 'aplicado' ? 'ok' : ''}">${esc(c.status)}</div></div>${c.erro ? `<div class="m">${esc(c.erro)}</div>` : ''}</div>`).join('') : '<div class="vazio">Nenhum.</div>'}
+  const L = foto.leads, fu = L ? L.followups_hoje.length : 0, novos = L ? L.novos_sem_contato.length : 0;
+  const leads = ((foto.modulos || []).includes('comercial')) ? `<div class="card" data-aba="leads"><div class="linha"><div><div class="t">Leads</div><div class="m">${fu} follow-up(s) hoje · ${novos} novo(s) sem contato</div></div><div class="m">›</div></div></div>` : '';
+  return `${leads}<h2>Pedidos enviados ao computador</h2>${ped.length ? ped.map((c) => `<div class="card"><div class="linha"><div class="t">${esc(c.tipo.replace(/_/g, ' '))}</div><div class="m ${c.status === 'erro' ? 'vencido' : c.status === 'aplicado' ? 'ok' : ''}">${esc(c.status)}</div></div>${c.erro ? `<div class="m">${esc(c.erro)}</div>` : ''}</div>`).join('') : '<div class="vazio">Nenhum.</div>'}
   <h2>Conexão</h2><div class="card"><div class="m">Os dados vêm do Dudoo Lite do computador: ele envia ao abrir, a cada 5 minutos e ao fechar. Se estiver desligado, o celular mostra o último envio. Prontuário e documentos não passam por aqui.</div>
   <div class="acoes"><button class="b" id="desconectar">Desconectar este celular</button></div></div>`;
 }
@@ -446,6 +449,139 @@ async function salvarNota() {
   if (!(await enviar(tipo, dados))) { overlay = JSON.parse(antes); guardar({ conexao, foto, comandos, overlay }); desenhar(); }   // sem internet: a nota some da lista e o aviso já foi dado
 }
 
+// -- modo atendente (link individual): só a agenda e o lançamento do atendimento/cobrança ----------------------------------
+
+const CHAVE_LANCADOS = 'dudoo-lite-web-lancados';
+let lancados = lerChave(CHAVE_LANCADOS) || {};     // horários já lançados por aqui e ainda não confirmados pelo computador
+let lanc = null, avBusca = '', avCliente = '', avServico = '';
+const numero = (t) => parseFloat(String(t || '').replace(/\./g, '').replace(',', '.')) || 0;
+
+function desenharAtendente() {
+  const palco = $('#palco'), termos = foto.termos || {};
+  $('#sub-topo').textContent = ((foto.colaborador && foto.colaborador.nome) || '') + (foto.negocio ? ' · ' + foto.negocio : '') + ' · atualizado ' + quando(foto.atualizado_em);
+  Object.keys(lancados).forEach((id) => { const e = (foto.agenda || []).find((x) => x.id === id); if (!e || e.status === 'Concluído' || Date.now() - lancados[id] > 86400000) delete lancados[id]; });
+  const perm = foto.permissoes || { ver_agenda: true, editar_agendamentos: true, ver_financeiro: false };
+  const abas = [];
+  if (perm.ver_agenda) abas.push(['agenda', 'Agenda']);
+  if (perm.editar_agendamentos) abas.push(['lancar', 'Lançar']);
+  if (perm.ver_financeiro && foto.meu_mes) abas.push(['minhas', 'Meu mês']);
+  abas.push(['mais', 'Mais']);
+  if (!abas.some((a) => a[0] === aba)) aba = 'agenda';
+  $('#abas').innerHTML = abas.map(([k, r]) => `<button data-aba="${k}" class="${k === aba ? 'on' : ''}">${r}</button>`).join('');
+  if (!perm.editar_agendamentos) lanc = null;
+  palco.innerHTML = lanc ? formLancamento() : ({ agenda: telaAgendaAtendente, lancar: telaLancarAvulso, minhas: telaMeuMes, mais: telaMaisAtendente })[aba]();
+  ligarAtendente();
+}
+
+function telaMeuMes() {
+  const f = foto.meu_mes || {};
+  return `<h2>Meu mês · ${esc(f.mes || '')}</h2>
+  <div class="card"><div class="linha"><div class="m">Comissão</div><div class="valor">${brl(f.comissao || 0)}</div></div></div>
+  <div class="card"><div class="linha"><div class="m">Total atendido</div><div class="valor">${brl(f.valor || 0)}</div></div>
+  <div class="m">${f.atendimentos || 0} lançado(s) neste mês</div></div>`;
+}
+
+function cardAtendente(e) {
+  const feito = e.status === 'Concluído', enviado = !!lancados[e.id];
+  const podeEditar = !foto.permissoes || foto.permissoes.editar_agendamentos;
+  const acao = !podeEditar ? '' : feito ? '<div class="m ok">✓ Lançado</div>' : enviado ? '<div class="m ok">✓ Enviado ao computador</div>' : `<button class="b p" data-lancar="${esc(e.id)}">Lançar</button>`;
+  return `<div class="card ${feito || enviado ? 'fechada' : ''}"><div class="linha"><div><div class="t">${esc(e.hora)} · ${esc(e.titulo)}</div>
+    <div class="m">${esc(e.cliente)}${e.valor ? ' · ' + brl(e.valor) : ''}</div></div>${acao}</div></div>`;
+}
+
+function telaAgendaAtendente() {
+  const por = {}; (foto.agenda || []).forEach((e) => { (por[e.data] = por[e.data] || []).push(e); });
+  const dias = Object.keys(por).sort();
+  if (!dias.length) return `<div class="vazio">Nada marcado para os próximos dias.</div><div class="acoes"><button class="b p" data-aba="lancar">Lançar sem horário</button></div>`;
+  return dias.map((d) => { const dt = new Date(d + 'T12:00:00');
+    return `<div class="dia ${d === foto.hoje ? 'hoje' : ''}">${DIAS[dt.getDay()]} ${dataBr(d)}${d === foto.hoje ? ' · hoje' : ''}</div>` + por[d].map(cardAtendente).join(''); }).join('');
+}
+
+function telaLancarAvulso() {
+  const termos = foto.termos || {}, q = semAcento(avBusca);
+  const lista = (foto.clientes || []).filter((c) => !q || semAcento(c.nome).includes(q)).slice(0, 8);
+  const cli = (foto.clientes || []).find((c) => c.id === avCliente);
+  return `<h2>Lançar sem horário</h2>
+  <div class="m">Para quem chegou sem marcar. Escolha ${esc((termos.cliente_um || 'o cadastro').toLowerCase())} e o serviço.</div>
+  ${cli ? `<div class="card"><div class="linha"><div class="t">${esc(cli.nome)}</div><button class="b" id="av-trocar">Trocar</button></div></div>`
+      : `<input id="av-busca" placeholder="Buscar pelo nome" value="${esc(avBusca)}">${lista.map((c) => `<div class="card" data-avcli="${esc(c.id)}"><div class="t">${esc(c.nome)}</div></div>`).join('') || '<div class="vazio">Ninguém encontrado.</div>'}`}
+  ${cli ? `<select id="av-servico"><option value="">Escolha o serviço</option>${(foto.servicos || []).map((sv) => `<option value="${esc(sv.id)}" ${sv.id === avServico ? 'selected' : ''}>${esc(sv.nome)}${sv.preco ? ' · ' + brl(sv.preco) : ''}</option>`).join('')}</select>
+    <div class="acoes"><button class="b p" id="av-seguir">Continuar</button></div>` : ''}`;
+}
+
+function telaMaisAtendente() {
+  const ped = comandos.slice().reverse().slice(0, 8);
+  return `<h2>Pedidos enviados ao computador</h2>${ped.length ? ped.map((c) => `<div class="card"><div class="linha"><div class="t">${esc(c.tipo.replace(/_/g, ' '))}</div><div class="m ${c.status === 'erro' ? 'vencido' : c.status === 'aplicado' ? 'ok' : ''}">${esc(c.status)}</div></div>${c.erro ? `<div class="m">${esc(c.erro)}</div>` : ''}</div>`).join('') : '<div class="vazio">Nenhum.</div>'}
+  <h2>Conexão</h2><div class="card"><div class="m">Este acesso mostra só o que foi liberado para você (agenda, lançamento e o seu mês). O computador aplica o que você enviar quando o Dudoo Lite estiver aberto; se estiver fechado, o pedido espera na fila.</div>
+  <div class="acoes"><button class="b" id="desconectar">Desconectar este celular</button></div></div>`;
+}
+
+function formLancamento() {
+  const P = foto.pagamento || { formas: ['PIX'], parceladas: [], padrao_recebido: false }, L = lanc;
+  return `<div class="acoes"><button class="b" id="l-voltar">‹ Voltar</button></div>
+  <h2>${esc(L.titulo)}</h2><div class="m">${esc(L.cliente)}${L.hora ? ' · ' + esc(L.hora) : ''}</div>
+  ${L.preco > 0 ? `<div class="card"><div class="linha"><div class="m">Valor</div><div class="valor">${brl(L.preco)}</div></div></div>` : '<input id="l-valor" inputmode="decimal" placeholder="Valor (R$)" aria-label="Valor">'}
+  <div class="m">Desconto (opcional)</div>
+  <div class="filtros"><input id="l-desc" inputmode="decimal" placeholder="0" aria-label="Desconto"><select id="l-dtipo" aria-label="Tipo do desconto"><option value="valor">em R$</option><option value="percentual">em %</option></select></div>
+  <select id="l-forma" aria-label="Forma de pagamento">${P.formas.map((f) => `<option>${esc(f)}</option>`).join('')}</select>
+  <input id="l-parc" type="number" inputmode="numeric" min="1" max="12" value="1" aria-label="Parcelas" placeholder="Parcelas" hidden>
+  <div class="seg"><button class="b ${L.rec ? 'p' : ''}" data-rec="1">Já recebido</button><button class="b ${L.rec ? '' : 'p'}" data-rec="0">A receber</button></div>
+  <div class="card"><div class="linha"><div class="m">Total</div><div class="valor" id="l-total"></div></div></div>
+  <div class="acoes"><button class="b p" id="l-ok">Lançar</button>${L.agId ? '<button class="b" id="l-atendido">Só marcar como atendido</button>' : ''}</div>`;
+}
+
+function totalLanc() {
+  const bruto = lanc.preco > 0 ? lanc.preco : numero(($('#l-valor') || {}).value), d = numero($('#l-desc').value);
+  const tot = $('#l-dtipo').value === 'percentual' ? bruto - bruto * d / 100 : bruto - d;
+  $('#l-total').textContent = brl(Math.max(0, tot));
+  return { bruto, d, valido: d >= 0 && (($('#l-dtipo').value === 'percentual') ? d <= 100 : d <= bruto) };
+}
+
+function abrirLancamento(dados) { lanc = Object.assign({ rec: !!(foto.pagamento && foto.pagamento.padrao_recebido) }, dados); desenhar(); window.scrollTo(0, 0); }
+
+async function enviarLancamento(soAtendido) {
+  const t = totalLanc();
+  if (!soAtendido && !t.valido) { toast('O desconto não pode ser maior que o valor.'); return; }
+  if (!soAtendido && !(t.bruto > 0)) { toast('Informe o valor.'); return; }
+  const L = lanc, dados = soAtendido ? { agendamento_id: L.agId } : {
+    agendamento_id: L.agId || '', cliente_id: L.clienteId || '', servico_id: L.servicoId || '', valor: L.preco > 0 ? '' : String(t.bruto),
+    desconto: String(t.d || 0), desconto_tipo: $('#l-dtipo').value, forma_pagamento: $('#l-forma').value,
+    parcelas: Math.max(1, parseInt($('#l-parc').value, 10) || 1), recebido: !!L.rec,
+  };
+  $('#l-ok').disabled = true;
+  const ok = await enviar(soAtendido ? 'marcar_atendido' : 'lancar_atendimento', dados, 'Enviado. Aparece como lançado quando o computador aplicar.');
+  if (!ok) { desenhar(); return; }
+  if (L.agId) { lancados[L.agId] = Date.now(); gravarChave(CHAVE_LANCADOS, lancados); } else { avCliente = ''; avServico = ''; avBusca = ''; }
+  lanc = null; desenhar();
+}
+
+function ligarAtendente() {
+  document.querySelectorAll('[data-lancar]').forEach((b) => { b.onclick = () => {
+    const e = (foto.agenda || []).find((x) => x.id === b.dataset.lancar); if (!e) return;
+    abrirLancamento({ agId: e.id, titulo: e.titulo, cliente: e.cliente, hora: e.hora, preco: e.valor || 0 });
+  }; });
+  const bb = $('#av-busca'); if (bb) bb.oninput = () => { avBusca = bb.value; const pos = bb.selectionStart; desenhar(); const n = $('#av-busca'); n.focus(); n.setSelectionRange(pos, pos); };
+  document.querySelectorAll('[data-avcli]').forEach((c) => { c.onclick = () => { avCliente = c.dataset.avcli; desenhar(); }; });
+  const at = $('#av-trocar'); if (at) at.onclick = () => { avCliente = ''; avServico = ''; desenhar(); };
+  const sv = $('#av-servico'); if (sv) sv.onchange = () => { avServico = sv.value; };
+  const sg = $('#av-seguir'); if (sg) sg.onclick = () => {
+    const servico = (foto.servicos || []).find((x) => x.id === ($('#av-servico').value)), cli = (foto.clientes || []).find((c) => c.id === avCliente);
+    if (!servico || !cli) { toast('Escolha o serviço.'); return; }
+    abrirLancamento({ clienteId: cli.id, cliente: cli.nome, servicoId: servico.id, titulo: servico.nome, preco: servico.preco || 0 });
+  };
+  const dc = $('#desconectar'); if (dc) dc.onclick = () => { guardar({}); conexao = foto = null; lanc = null; desenhar(); };
+  if (!lanc || !$('#l-ok')) return;
+  const P = foto.pagamento || { parceladas: [] }, forma = $('#l-forma'), parc = $('#l-parc');
+  const mostrarParcelas = () => { parc.hidden = !P.parceladas.includes(forma.value); };
+  forma.onchange = mostrarParcelas; mostrarParcelas();
+  ['#l-desc', '#l-dtipo', '#l-valor'].forEach((id) => { const e = $(id); if (e) { e.oninput = totalLanc; e.onchange = totalLanc; } });
+  document.querySelectorAll('[data-rec]').forEach((b) => { b.onclick = () => { lanc.rec = b.dataset.rec === '1'; document.querySelectorAll('[data-rec]').forEach((x) => x.classList.toggle('p', x === b)); }; });
+  $('#l-voltar').onclick = () => { lanc = null; desenhar(); };
+  $('#l-ok').onclick = () => enviarLancamento(false);
+  const la = $('#l-atendido'); if (la) la.onclick = () => enviarLancamento(true);
+  totalLanc();
+}
+
 // -- eventos --------------------------------------------------------------
 
 function formulario(titulo, campos, ao_enviar) {
@@ -490,7 +626,7 @@ function ligar() {
   const dc = $('#desconectar'); if (dc) dc.onclick = () => { guardar({}); conexao = foto = null; desenhar(); };
 }
 
-document.addEventListener('click', (e) => { const b = e.target.closest('[data-aba]'); if (b) { aba = b.dataset.aba; desenhar(); window.scrollTo(0, 0); } });
+document.addEventListener('click', (e) => { const b = e.target.closest('[data-aba]'); if (b) { aba = b.dataset.aba; lanc = null; desenhar(); window.scrollTo(0, 0); } });
 $('#btn-atualizar').onclick = () => atualizar(false);
 window.addEventListener('online', () => atualizar(true));
 document.addEventListener('visibilitychange', () => { if (document.hidden) pessoalLiberado = false; else atualizar(true); });

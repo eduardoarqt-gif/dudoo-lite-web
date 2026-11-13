@@ -1,5 +1,5 @@
 // Só o "casco" do app fica em cache (abre rápido e sem rede). Nenhuma chamada ao relay é guardada aqui.
-const CACHE = 'dudoo-lite-web-v6';
+const CACHE = 'dudoo-lite-web-v9';
 const CASCO = ['./', 'index.html', 'styles.css', 'app.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'icon-maskable-512.png', 'icon-180.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(CASCO)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => {
