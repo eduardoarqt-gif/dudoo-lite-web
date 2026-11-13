@@ -380,7 +380,7 @@ function fichaCliente(c) {
   ${proximos.length ? `<h2>Próximos agendamentos</h2>${proximos.map((e) => `<div class="card"><div class="linha"><div class="t">${esc(e.titulo)}</div><div class="m">${dataBr(e.data)} ${esc(e.hora)}</div></div></div>`).join('')}` : ''}
   ${f && f.pacotes.length ? `<h2>Pacotes</h2>${f.pacotes.map((p) => `<div class="card"><div class="linha"><div class="t">${esc(p.nome)}</div><div class="m">${p.usadas} de ${p.total} sessões${p.status === 'concluido' ? ' · concluído' : ''}</div></div></div>`).join('')}` : ''}
   <h2>${esc(termos.atendimento || 'Atendimentos')} recentes${f && f.total > f.atendimentos.length ? ` (${f.atendimentos.length} de ${f.total})` : ''}</h2><div class="card">${atendimentos}</div>
-  <div class="m" style="margin-top:8px">${f && f.atendimentos.some((a) => a.clinico) ? 'Toque numa consulta para ver o que foi registrado. Anamnese, alergias, documentos e fotos ficam só no computador.' : 'Só dados de cadastro e histórico. O registro das consultas fica no computador (dá para liberar nas Configurações do Dudoo Lite).'}</div>`;
+  <div class="m" style="margin-top:8px">${f && f.atendimentos.some((a) => a.clinico) ? 'Toque em um item da lista para ver o que foi registrado. Anamnese, alergias, documentos e fotos ficam só no computador.' : 'Só dados de cadastro e histórico. O registro dos atendimentos fica no computador (dá para liberar nas Configurações do Dudoo Lite).'}</div>`;
 }
 
 // -- notas -----------------------------------------------------------------
