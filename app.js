@@ -415,6 +415,8 @@ function consultaDetalhe(c, a) {
 }
 
 let novaCons = null;   // id do cadastro com a consulta nova aberta (formulário), só saúde
+let consFotos = [];    // fotos anexadas à consulta em andamento (arquivos escolhidos; reduzidas só no envio)
+const MAX_FOTOS_CONSULTA = 8;
 
 function formConsulta(c) {
   const K = foto.consulta_celular || { campos: [], medidas: [], servicos: [] }, hoje = foto.hoje;
@@ -424,6 +426,8 @@ function formConsulta(c) {
   <select id="cn-servico" aria-label="Procedimento">${K.servicos.map((v) => `<option value="${esc(v.id)}">${esc(v.nome)}</option>`).join('')}</select>
   <input id="cn-data" type="date" value="${esc(hoje)}" aria-label="Data">
   <textarea id="cn-obs" rows="2" placeholder="Observações do atendimento"></textarea>
+  <div class="acoes"><button class="b" id="cn-fotos-btn">Anexar fotos</button><input type="file" id="cn-fotos-arq" accept="image/*" multiple hidden></div>
+  <div class="m" id="cn-fotos-info">${consFotos.length ? consFotos.length + ' foto(s) anexada(s)' : 'Nenhuma foto anexada.'} As fotos enviadas pelo celular chegam com qualidade reduzida; para manter a original, coloque direto no Dudoo Lite do computador.</div>
   ${K.campos.map(([k, r]) => `<textarea data-cn-campo="${esc(k)}" rows="3" placeholder="${esc(r)}" aria-label="${esc(r)}"></textarea>`).join('')}
   ${K.medidas.length ? '<h2>Medidas</h2>' + K.medidas.map(([k, r, u]) => `<input data-cn-medida="${esc(k)}" placeholder="${esc(r)}${u ? ' (' + esc(u) + ')' : ''}" inputmode="decimal" aria-label="${esc(r)}">`).join('') : ''}
   <div class="acoes"><button class="b p" id="cn-salvar">Salvar consulta</button><button class="b" id="cn-cancelar">Cancelar</button></div>`;
@@ -476,16 +480,17 @@ function reduzirFoto(arquivo) {
   });
 }
 
-async function enviarFotoCliente(clienteId, arquivo) {
-  if (!arquivo) return;
-  toast('Preparando a foto…');
+async function enviarFotoCliente(clienteId, arquivo, lote, silencioso) {
+  if (!arquivo) return false;
+  if (!silencioso) toast('Preparando a foto…');
   try {
     const imagem = await reduzirFoto(arquivo);
-    await relay('POST', 'lite_comando', { tenant: conexao.t, tipo: 'enviar_foto_cliente', dados: { cliente_id: clienteId, imagem, data: foto.hoje } });
-    toast('Foto enviada com qualidade reduzida. Entra na ficha quando o Dudoo Lite abrir no computador.');
-    await atualizar(true);
+    await relay('POST', 'lite_comando', { tenant: conexao.t, tipo: 'enviar_foto_cliente', dados: { cliente_id: clienteId, imagem, data: foto.hoje, lote: lote || '' } });
+    if (!silencioso) { toast('Foto enviada com qualidade reduzida. Entra na ficha quando o Dudoo Lite abrir no computador.'); await atualizar(true); }
+    return true;
   } catch (e) {
     toast(e.message === 'Failed to fetch' ? 'Sem internet: a foto não foi enviada. Tente de novo.' : e.message);
+    return false;
   }
 }
 
@@ -719,8 +724,16 @@ function ligar() {
   const bf = $('#cad-foto'), af = $('#cad-foto-arq');
   if (bf && af) { bf.onclick = () => af.click(); af.onchange = () => { const a = af.files && af.files[0]; af.value = ''; enviarFotoCliente(cadAberto, a); }; }
   const bco = $('#cad-consulta'); if (bco) bco.onclick = () => { novaCons = cadAberto; desenhar(); window.scrollTo(0, 0); };
-  const cnv = $('#cons-nova-voltar'); if (cnv) cnv.onclick = () => { novaCons = null; desenhar(); };
-  const cnc = $('#cn-cancelar'); if (cnc) cnc.onclick = () => { novaCons = null; desenhar(); };
+  const cnv = $('#cons-nova-voltar'); if (cnv) cnv.onclick = () => { novaCons = null; consFotos = []; desenhar(); };
+  const cnc = $('#cn-cancelar'); if (cnc) cnc.onclick = () => { novaCons = null; consFotos = []; desenhar(); };
+  const cfb = $('#cn-fotos-btn'), cfa = $('#cn-fotos-arq');
+  if (cfb && cfa) {
+    cfb.onclick = () => cfa.click();
+    cfa.onchange = () => {
+      consFotos = consFotos.concat(Array.from(cfa.files || [])).slice(0, MAX_FOTOS_CONSULTA); cfa.value = '';
+      $('#cn-fotos-info').textContent = consFotos.length + ' foto(s) anexada(s) (máximo ' + MAX_FOTOS_CONSULTA + '). As fotos enviadas pelo celular chegam com qualidade reduzida; para manter a original, coloque direto no Dudoo Lite do computador.';
+    };
+  }
   const cns = $('#cn-salvar'); if (cns) cns.onclick = async () => {
     const campos = {}, medidas = {};
     document.querySelectorAll('[data-cn-campo]').forEach((e) => { campos[e.dataset.cnCampo] = e.value.trim(); });
@@ -728,9 +741,19 @@ function ligar() {
     const obs = $('#cn-obs').value.trim();
     if (!obs && !Object.values(campos).some(Boolean) && !Object.values(medidas).some(Boolean)) { toast('Escreva algo na consulta.'); return; }
     cns.disabled = true;
-    const ok = await enviar('registrar_consulta', { cliente_id: cadAberto, servico_id: $('#cn-servico').value, data: $('#cn-data').value || foto.hoje, observacoes: obs, campos, medidas },
+    const lote = Math.random().toString(16).slice(2, 12) + Date.now().toString(16), clienteId = cadAberto, anexos = consFotos.slice();
+    const ok = await enviar('registrar_consulta', { cliente_id: clienteId, servico_id: $('#cn-servico').value, data: $('#cn-data').value || foto.hoje, observacoes: obs, campos, medidas, lote },
       'Consulta guardada. Entra no computador quando o Dudoo Lite abrir.');
-    if (ok) novaCons = null;
+    if (ok) {
+      novaCons = null; consFotos = [];
+      if (anexos.length) {
+        toast('Enviando ' + anexos.length + ' foto(s) da consulta…');
+        let enviadas = 0;
+        for (const a of anexos) { if (await enviarFotoCliente(clienteId, a, lote, true)) enviadas++; else break; }
+        toast(enviadas === anexos.length ? 'Consulta e fotos enviadas (fotos com qualidade reduzida).' : 'Consulta enviada, mas só ' + enviadas + ' de ' + anexos.length + ' foto(s) foram. Envie o resto pela ficha.');
+        await atualizar(true);
+      }
+    }
     desenhar();
   };
   document.querySelectorAll('[data-cons]').forEach((l) => { l.onclick = () => { consAberta = l.dataset.cons; desenhar(); window.scrollTo(0, 0); }; });
