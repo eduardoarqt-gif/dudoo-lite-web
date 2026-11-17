@@ -16,6 +16,7 @@ const CHAVE_FILA = 'dudoo-lite-web-fila';
 let fila = lerChave(CHAVE_FILA) || [];
 // Cadastros: busca e ficha aberta.
 let buscaCad = '', cadAberto = null, consAberta = null;
+let procAberto = null, buscaProc = '', procSituacao = 'andamento';
 let finEscopo = 'empresa', finMes = '', contaAba = 'receber', pessoalLiberado = false, itensAbertos = {}, baixasLocais = {};
 // Notas: filtros, nota aberta no editor (id, 'nova' ou null), rascunho do que está sendo digitado e o que já foi pedido ao computador
 // mas ainda não aplicado (aparece na lista mesmo antes do computador aplicar).
@@ -107,6 +108,7 @@ function abasDisponiveis() {
   if (m.includes('agenda')) lista.push(['agenda', 'Agenda']);
   lista.push(['contas', 'Financeiro']);
   if (m.includes('cadastros')) lista.push(['cadastros', ((foto.termos && foto.termos.cliente) || 'Cadastros')]);
+  if (m.includes('processos') && foto.processos) lista.push(['processos', 'Processos']);
   if (m.includes('notas')) lista.push(['notas', 'Notas']);
   lista.push(['mais', 'Mais']);
   return lista;
@@ -121,7 +123,7 @@ function desenhar() {
   $('#sub-topo').textContent = (foto.negocio ? foto.negocio + ' · ' : '') + 'atualizado ' + quando(foto.atualizado_em);
   const abas = abasDisponiveis(); if (!abas.some((a) => a[0] === aba)) aba = 'hoje';
   $('#abas').innerHTML = abas.map(([k, r]) => `<button data-aba="${k}" class="${k === aba || (k === 'mais' && aba === 'leads') ? 'on' : ''}">${r}</button>`).join('');
-  palco.innerHTML = ({ hoje: telaHoje, agenda: telaAgenda, contas: telaContas, cadastros: telaCadastros, leads: telaLeads, notas: telaNotas, mais: telaMais })[aba]();
+  palco.innerHTML = ({ hoje: telaHoje, agenda: telaAgenda, contas: telaContas, cadastros: telaCadastros, processos: telaProcessos, leads: telaLeads, notas: telaNotas, mais: telaMais })[aba]();
   ligar();
 }
 
@@ -337,6 +339,52 @@ function telaMais() {
 }
 
 
+// -- processos: lista e linha do tempo (advocacia) ---------------------------------------------------------------------
+
+const COR_ETIQUETA = { vermelho: 'var(--erro)', amarelo: 'var(--alerta)', verde: 'var(--ok)', azul: '#4F7391', cinza: 'var(--suave)' };
+const bolinha = (e) => `<span class="bola" style="background:${COR_ETIQUETA[e] || 'var(--suave)'}"></span>`;
+const diasTxt = (n) => (n === 1 ? '1 dia' : n + ' dias');
+
+function linhaDoTempo(p) {
+  const passos = (p.fases || []).map((f) => {
+    const estado = f.atual ? (p.encerrado ? 'fim' : 'atual') : 'feito';
+    const datas = f.atual ? `desde ${dataLonga(f.entrada)}` : `${dataLonga(f.entrada)} → ${dataLonga(f.saida)}`;
+    const quem = f.segurando && f.segurando !== '—' ? ` · com ${esc(f.segurando)}` : '';
+    return `<li class="${estado}"><span class="no"></span><div class="t">${esc(f.rotulo)}</div><div class="m">${datas} · ${diasTxt(f.dias)}${quem}</div></li>`;
+  });
+  if (!p.encerrado) passos.push('<li class="falta"><span class="no"></span><div class="t">Encerrado</div><div class="m">ainda não</div></li>');
+  return `<ol class="tl">${passos.join('')}</ol>`;
+}
+
+function fichaProcesso(p) {
+  const alertas = (p.alertas || []).map((a) => `<div class="m ${a.nivel === 'vencido' || a.nivel === 'hoje' ? 'vencido' : ''}">${esc(a.texto)}</div>`).join('');
+  const prazos = (p.prazos || []).map((x) => `<div class="linha"><div class="t">${esc(x.titulo || 'Prazo')}</div><div class="m">${dataLonga(x.prazo)}</div></div>`).join('');
+  const auds = (p.audiencias || []).map((x) => `<div class="linha"><div class="t">${esc(x.tipo || 'Audiência')}</div><div class="m">${dataLonga(x.data)}${x.hora ? ' às ' + esc(x.hora) : ''}</div></div>`).join('');
+  return `<div class="acoes"><button class="b" id="proc-voltar">‹ Processos</button></div>
+  <h2>${bolinha(p.etiqueta)} ${esc(p.apelido)}</h2>
+  <div class="m">${esc([p.numero, p.tipo, p.tribunal, p.comarca].filter(Boolean).join(' · '))}</div>
+  <div class="m">${esc([p.cliente, p.parte_contraria ? 'contra ' + p.parte_contraria : ''].filter(Boolean).join(' · '))}</div>
+  <div class="card" style="margin-top:10px"><div class="t">${esc(p.etapa)}${p.encerrado && p.resultado ? ' · ' + esc(p.resultado) : ''}</div>
+    <div class="m">${p.encerrado ? 'Durou ' + diasTxt(p.dias_total) : 'Com ' + esc(p.segurando) + ' há ' + diasTxt(p.dias_na_etapa) + ' · ' + diasTxt(p.dias_total) + ' no total'}</div>${alertas}</div>
+  <h2>Acompanhamento</h2>${linhaDoTempo(p)}
+  ${prazos ? `<h2>Prazos em aberto</h2><div class="card">${prazos}</div>` : ''}
+  ${auds ? `<h2>Audiências</h2><div class="card">${auds}</div>` : ''}
+  <div class="m" style="margin-top:8px">Somente leitura. Documentos, peças e o restante ficam no computador.</div>`;
+}
+
+function telaProcessos() {
+  if (procAberto) { const p = (foto.processos || []).find((x) => x.id === procAberto); if (p) return fichaProcesso(p); procAberto = null; }
+  const q = semAcento(buscaProc);
+  const lista = (foto.processos || []).filter((p) => (procSituacao === 'todos' || (procSituacao === 'encerrados') === p.encerrado)
+    && (!q || semAcento([p.apelido, p.numero, p.cliente, p.tribunal, p.parte_contraria].join(' ')).includes(q)));
+  const aba = (k, r) => `<button class="b ${procSituacao === k ? 'on' : ''}" data-procsit="${k}">${r}</button>`;
+  return `<h2>Processos (${lista.length})</h2><input id="busca-proc" placeholder="Buscar por número, parte ou tribunal" value="${esc(buscaProc)}">
+  <div class="acoes">${aba('andamento', 'Em andamento')}${aba('encerrados', 'Encerrados')}${aba('todos', 'Todos')}</div>
+  <div class="m legenda">${bolinha('vermelho')} prazo vencido ou hoje ${bolinha('amarelo')} com o escritório ${bolinha('verde')} aguardando ${bolinha('cinza')} encerrado</div>
+  ${lista.map((p) => `<div class="card" data-proc="${esc(p.id)}"><div class="linha"><div><div class="t">${bolinha(p.etiqueta)} ${esc(p.apelido)}</div>
+    <div class="m">${esc(p.cliente)}${p.numero ? ' · ' + esc(p.numero) : ''}</div><div class="m">${esc(p.etapa)}${p.encerrado ? '' : ' · com ' + esc(p.segurando) + ' há ' + diasTxt(p.dias_na_etapa)}</div></div><div class="m">›</div></div></div>`).join('') || '<div class="vazio">Nenhum processo.</div>'}`;
+}
+
 // -- cadastros: lista e ficha ------------------------------------------------------------------------------------------
 
 const semAcento = (t) => String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
@@ -366,7 +414,24 @@ function consultaDetalhe(c, a) {
   <div class="m" style="margin-top:8px">Somente leitura. Texto resumido; o registro completo, as fotos e os documentos ficam no computador.</div>`;
 }
 
+let novaCons = null;   // id do cadastro com a consulta nova aberta (formulário), só saúde
+
+function formConsulta(c) {
+  const K = foto.consulta_celular || { campos: [], medidas: [], servicos: [] }, hoje = foto.hoje;
+  return `<div class="acoes"><button class="b" id="cons-nova-voltar">‹ ${esc(c.nome)}</button></div>
+  <h2>Nova consulta</h2>
+  <div class="m">Fica salva no celular e no computador quando o Dudoo Lite abrir.</div>
+  <select id="cn-servico" aria-label="Procedimento">${K.servicos.map((v) => `<option value="${esc(v.id)}">${esc(v.nome)}</option>`).join('')}</select>
+  <input id="cn-data" type="date" value="${esc(hoje)}" aria-label="Data">
+  <textarea id="cn-obs" rows="2" placeholder="Observações do atendimento"></textarea>
+  ${K.campos.map(([k, r]) => `<textarea data-cn-campo="${esc(k)}" rows="3" placeholder="${esc(r)}" aria-label="${esc(r)}"></textarea>`).join('')}
+  ${K.medidas.length ? '<h2>Medidas</h2>' + K.medidas.map(([k, r, u]) => `<input data-cn-medida="${esc(k)}" placeholder="${esc(r)}${u ? ' (' + esc(u) + ')' : ''}" inputmode="decimal" aria-label="${esc(r)}">`).join('') : ''}
+  <div class="acoes"><button class="b p" id="cn-salvar">Salvar consulta</button><button class="b" id="cn-cancelar">Cancelar</button></div>`;
+}
+
 function fichaCliente(c) {
+  if (novaCons === c.id && foto.consulta_celular) return formConsulta(c);
+  novaCons = null;
   if (consAberta) { const a = c.ficha && c.ficha.atendimentos.find((x) => x.id === consAberta && x.clinico); if (a) return consultaDetalhe(c, a); consAberta = null; }
   const termos = foto.termos || {}, f = c.ficha, zap = foneLink(c.telefone), tel = String(c.telefone || '').replace(/\D/g, '');
   const linha = (r, v) => (v ? `<div class="linha"><div class="m">${r}</div><div class="t" style="text-align:right">${esc(v)}</div></div>` : '');
@@ -377,13 +442,52 @@ function fichaCliente(c) {
   <h2>${esc(c.nome)}${c.status && c.status !== 'Ativo' ? `<span class="pill">${esc(c.status)}</span>` : ''}</h2>
   <div class="card">${linha('Telefone', c.telefone)}${linha('Telefone 2', c.telefone2)}${linha('E-mail', c.email)}${linha('Nascimento', dataLonga(c.nascimento))}${linha('Cidade', c.cidade)}${linha('Instagram', c.instagram)}${linha('Cliente desde', dataLonga(c.desde))}
     ${tel ? `<div class="acoes"><a class="b" href="tel:${tel}">Ligar</a><a class="b" href="https://wa.me/${zap}" target="_blank" rel="noopener">WhatsApp</a>${c.email ? `<a class="b" href="mailto:${esc(c.email)}">E-mail</a>` : ''}</div>` : ''}</div>
+  ${(foto.fotos_celular || foto.consulta_celular) ? `<div class="acoes">${foto.consulta_celular ? '<button class="b p" id="cad-consulta">Nova consulta</button>' : ''}${foto.fotos_celular ? '<button class="b" id="cad-foto">Adicionar foto</button><input type="file" id="cad-foto-arq" accept="image/*" hidden>' : ''}</div>${foto.fotos_celular ? '<div class="m">Aviso: as fotos enviadas pelo celular chegam com qualidade reduzida. Para manter a qualidade original (antes e depois, por exemplo), coloque a foto direto no Dudoo Lite do computador.</div>' : ''}` : ''}
   ${proximos.length ? `<h2>Próximos agendamentos</h2>${proximos.map((e) => `<div class="card"><div class="linha"><div class="t">${esc(e.titulo)}</div><div class="m">${dataBr(e.data)} ${esc(e.hora)}</div></div></div>`).join('')}` : ''}
   ${f && f.pacotes.length ? `<h2>Pacotes</h2>${f.pacotes.map((p) => `<div class="card"><div class="linha"><div class="t">${esc(p.nome)}</div><div class="m">${p.usadas} de ${p.total} sessões${p.status === 'concluido' ? ' · concluído' : ''}</div></div></div>`).join('')}` : ''}
   <h2>${esc(termos.atendimento || 'Atendimentos')} recentes${f && f.total > f.atendimentos.length ? ` (${f.atendimentos.length} de ${f.total})` : ''}</h2><div class="card">${atendimentos}</div>
-  <div class="m" style="margin-top:8px">${f && f.atendimentos.some((a) => a.clinico) ? 'Toque em um item da lista para ver o que foi registrado. Anamnese, alergias, documentos e fotos ficam só no computador.' : 'Só dados de cadastro e histórico. O registro dos atendimentos fica no computador (dá para liberar nas Configurações do Dudoo Lite).'}</div>`;
+  <div class="m" style="margin-top:8px">${f && f.atendimentos.some((a) => a.clinico) ? 'Toque em um item da lista para ver o que foi registrado. Anamnese, alergias e documentos ficam só no computador.' : 'Só dados de cadastro e histórico. O registro dos atendimentos fica no computador (dá para liberar nas Configurações do Dudoo Lite).'}</div>`;
 }
 
 // -- notas -----------------------------------------------------------------
+
+// -- fotos do celular para a ficha ---------------------------------------------------------------------------------------
+
+const LIMITE_FOTO_B64 = 380000;   // o servidor aceita ~500 KB por item: a foto é reduzida até caber
+
+function reduzirFoto(arquivo) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(arquivo), img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      let lado = 1600, q = 0.8;
+      for (let i = 0; i < 8; i++) {
+        const f = Math.min(1, lado / Math.max(img.width, img.height)), cv = document.createElement('canvas');
+        cv.width = Math.max(1, Math.round(img.width * f)); cv.height = Math.max(1, Math.round(img.height * f));
+        cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+        const b64 = cv.toDataURL('image/jpeg', q).split(',')[1] || '';
+        if (b64.length <= LIMITE_FOTO_B64) return resolve(b64);
+        if (q > 0.55) q -= 0.1; else lado = Math.round(lado * 0.8);
+      }
+      reject(new Error('Não consegui reduzir essa foto.'));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Não consegui abrir essa foto.')); };
+    img.src = url;
+  });
+}
+
+async function enviarFotoCliente(clienteId, arquivo) {
+  if (!arquivo) return;
+  toast('Preparando a foto…');
+  try {
+    const imagem = await reduzirFoto(arquivo);
+    await relay('POST', 'lite_comando', { tenant: conexao.t, tipo: 'enviar_foto_cliente', dados: { cliente_id: clienteId, imagem, data: foto.hoje } });
+    toast('Foto enviada com qualidade reduzida. Entra na ficha quando o Dudoo Lite abrir no computador.');
+    await atualizar(true);
+  } catch (e) {
+    toast(e.message === 'Failed to fetch' ? 'Sem internet: a foto não foi enviada. Tente de novo.' : e.message);
+  }
+}
 
 function notasVisiveis() {
   const ex = new Set(overlay.excluidas || []);
@@ -607,7 +711,28 @@ function ligar() {
   const nc = $('#nova-conta'); if (nc) nc.onclick = novaConta;
   const bc = $('#busca-cad'); if (bc) bc.oninput = () => { buscaCad = bc.value; const pos = bc.selectionStart; desenhar(); const n = $('#busca-cad'); n.focus(); n.setSelectionRange(pos, pos); };
   document.querySelectorAll('[data-cad]').forEach((c) => { c.onclick = () => { cadAberto = c.dataset.cad; consAberta = null; desenhar(); window.scrollTo(0, 0); }; });
+  const bp = $('#busca-proc'); if (bp) bp.oninput = () => { buscaProc = bp.value; const pos = bp.selectionStart; desenhar(); const n = $('#busca-proc'); n.focus(); n.setSelectionRange(pos, pos); };
+  document.querySelectorAll('[data-procsit]').forEach((b) => { b.onclick = () => { procSituacao = b.dataset.procsit; desenhar(); }; });
+  document.querySelectorAll('[data-proc]').forEach((c) => { c.onclick = () => { procAberto = c.dataset.proc; desenhar(); window.scrollTo(0, 0); }; });
+  const pv = $('#proc-voltar'); if (pv) pv.onclick = () => { procAberto = null; desenhar(); };
   const cv = $('#cad-voltar'); if (cv) cv.onclick = () => { cadAberto = null; consAberta = null; desenhar(); };
+  const bf = $('#cad-foto'), af = $('#cad-foto-arq');
+  if (bf && af) { bf.onclick = () => af.click(); af.onchange = () => { const a = af.files && af.files[0]; af.value = ''; enviarFotoCliente(cadAberto, a); }; }
+  const bco = $('#cad-consulta'); if (bco) bco.onclick = () => { novaCons = cadAberto; desenhar(); window.scrollTo(0, 0); };
+  const cnv = $('#cons-nova-voltar'); if (cnv) cnv.onclick = () => { novaCons = null; desenhar(); };
+  const cnc = $('#cn-cancelar'); if (cnc) cnc.onclick = () => { novaCons = null; desenhar(); };
+  const cns = $('#cn-salvar'); if (cns) cns.onclick = async () => {
+    const campos = {}, medidas = {};
+    document.querySelectorAll('[data-cn-campo]').forEach((e) => { campos[e.dataset.cnCampo] = e.value.trim(); });
+    document.querySelectorAll('[data-cn-medida]').forEach((e) => { medidas[e.dataset.cnMedida] = e.value.trim(); });
+    const obs = $('#cn-obs').value.trim();
+    if (!obs && !Object.values(campos).some(Boolean) && !Object.values(medidas).some(Boolean)) { toast('Escreva algo na consulta.'); return; }
+    cns.disabled = true;
+    const ok = await enviar('registrar_consulta', { cliente_id: cadAberto, servico_id: $('#cn-servico').value, data: $('#cn-data').value || foto.hoje, observacoes: obs, campos, medidas },
+      'Consulta guardada. Entra no computador quando o Dudoo Lite abrir.');
+    if (ok) novaCons = null;
+    desenhar();
+  };
   document.querySelectorAll('[data-cons]').forEach((l) => { l.onclick = () => { consAberta = l.dataset.cons; desenhar(); window.scrollTo(0, 0); }; });
   const kv = $('#cons-voltar'); if (kv) kv.onclick = () => { consAberta = null; desenhar(); };
   const bn = $('#busca-nota'); if (bn) bn.oninput = () => { buscaNota = bn.value; const pos = bn.selectionStart; desenhar(); const n = $('#busca-nota'); n.focus(); n.setSelectionRange(pos, pos); };

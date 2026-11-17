@@ -38,3 +38,17 @@ textarea{resize:vertical}
 hr{border:0;border-top:1px solid var(--borda);margin:8px 0}
 [data-cad]{cursor:pointer}
 .abas button{font-size:12px;padding:10px 0}
+.bola{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:2px}
+.legenda{margin:6px 0 10px;line-height:1.9}
+.acoes .b.on{background:var(--destaque);color:var(--sobre);border-color:var(--destaque)}
+.tl{list-style:none;margin:6px 0 4px;padding:0 0 0 4px}
+.tl li{position:relative;padding:0 0 16px 26px}
+.tl li::before{content:"";position:absolute;left:8px;top:14px;bottom:-2px;width:2px;background:var(--borda)}
+.tl li:last-child::before{display:none}
+.tl li .no{position:absolute;left:1px;top:3px;width:16px;height:16px;border-radius:50%;box-sizing:border-box;border:2px solid var(--borda);background:var(--card)}
+.tl li.feito .no{background:var(--ok);border-color:var(--ok)}
+.tl li.feito::before{background:var(--ok)}
+.tl li.atual .no{background:var(--destaque);border-color:var(--destaque);box-shadow:0 0 0 4px color-mix(in srgb,var(--destaque) 25%,transparent)}
+.tl li.fim .no{background:var(--suave);border-color:var(--suave)}
+.tl li.falta .t,.tl li.falta .m{color:var(--suave);opacity:.6}
+.tl li.atual .t{font-weight:700}
