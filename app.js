@@ -14,9 +14,15 @@ let conexao = null, foto = null, comandos = [], aba = 'hoje', busca = '', erroRe
 // Pedidos feitos sem internet ficam guardados aqui e seguem sozinhos quando a conexão volta.
 const CHAVE_FILA = 'dudoo-lite-web-fila';
 let fila = lerChave(CHAVE_FILA) || [];
+// Consultas registradas por aqui e ainda não confirmadas pelo computador (17/11/2026, Eduardo: "adicionei uma consulta mas não apareceu na lista"): ficam na lista
+// do paciente como "aguardando o computador" até o Dudoo Lite aplicar. {lote, cmd (id do pedido; vazio se ainda está na fila sem internet), cliente_id, servico, data, quando}
+const CHAVE_CONSULTAS = 'dudoo-lite-web-consultas';
+let consultasLocais = (lerChave(CHAVE_CONSULTAS) || []).filter((c) => Date.now() - (c.quando || 0) < 7 * 86400000);
+let ultimoPedido = '';   // id do último pedido aceito pelo servidor (vazio se ficou na fila sem internet)
 // Cadastros: busca e ficha aberta.
 let buscaCad = '', cadAberto = null, consAberta = null;
 let procAberto = null, buscaProc = '', procSituacao = 'andamento';
+let escolhendo = null, buscaEsc = '', novaReuniao = null;   // "Iniciar" na Home (17/11/2026): escolhendo = 'consulta' | 'reuniao' (pergunta o paciente/processo); novaReuniao = id do processo com o formulário aberto
 let finEscopo = 'empresa', finMes = '', contaAba = 'receber', pessoalLiberado = false, itensAbertos = {}, baixasLocais = {};
 // Notas: filtros, nota aberta no editor (id, 'nova' ou null), rascunho do que está sendo digitado e o que já foi pedido ao computador
 // mas ainda não aplicado (aparece na lista mesmo antes do computador aplicar).
@@ -62,7 +68,11 @@ async function relay(metodo, nome, corpo, consulta) {
 async function esvaziarFila() {
   if (!conexao) return;
   while (fila.length) {
-    try { await relay('POST', 'lite_comando', { tenant: conexao.t, tipo: fila[0].tipo, dados: fila[0].dados }); } catch (e) { return; }
+    try {
+      const r = await relay('POST', 'lite_comando', { tenant: conexao.t, tipo: fila[0].tipo, dados: fila[0].dados });
+      const lote = fila[0].dados && fila[0].dados.lote, local = lote && consultasLocais.find((c) => c.lote === lote);
+      if (local && r && r.id) { local.cmd = r.id; gravarChave(CHAVE_CONSULTAS, consultasLocais); }
+    } catch (e) { return; }
     fila.shift(); gravarChave(CHAVE_FILA, fila);
   }
 }
@@ -80,12 +90,14 @@ async function atualizar(silencioso) {
   } catch (e) {
     erroRede = e.message === 'Failed to fetch' ? 'Sem internet — mostrando os últimos dados.' : e.message;
   }
-  desenhar();
+  if (!novaCons && !novaReuniao) desenhar();   // com o formulário de consulta aberto não redesenha: voltar da câmera/galeria não pode apagar o que foi digitado
 }
 
 async function enviar(tipo, dados, msg) {
+  ultimoPedido = '';
   try {
-    await relay('POST', 'lite_comando', { tenant: conexao.t, tipo, dados });
+    const resposta = await relay('POST', 'lite_comando', { tenant: conexao.t, tipo, dados });
+    ultimoPedido = (resposta && resposta.id) || '';
     toast(msg || 'Enviado. O computador aplica quando o Dudoo Lite estiver aberto.');
     await atualizar(true);
     return true;
@@ -145,7 +157,46 @@ function telaConectar(palco) {
   };
 }
 
+// Reunião no celular: com processo (advocacia) ou, nos negócios sem processos (festas...), com o cliente (vira nota "Reunião").
+function reuniaoDeProcesso() { return !!foto.reuniao_celular; }
+function temReuniao() { return reuniaoDeProcesso() ? (foto.processos || []).length > 0 : !!foto.reuniao_cliente_celular && (foto.clientes || []).length > 0; }
+
+function botoesIniciar() {
+  const termos = foto.termos || {}, rotulo = String(termos.atendimento_um || 'consulta').toLowerCase();
+  return `${foto.consulta_celular && (foto.clientes || []).length ? `<button class="b p" id="iniciar-consulta">+ Iniciar ${esc(rotulo)}</button>` : ''}${temReuniao() ? '<button class="b p" id="iniciar-reuniao">+ Iniciar reunião</button>' : ''}`;
+}
+
+// Pergunta a quem vincular: o paciente (consulta) ou o processo (reunião); escolhido, abre o formulário.
+function telaEscolher() {
+  const reuniao = escolhendo === 'reuniao' && reuniaoDeProcesso(), q = semAcento(buscaEsc), digitos = q.replace(/\D/g, '');
+  const termos = foto.termos || {}, cliente = termos.cliente_um || 'Cadastro', reuniaoCliente = escolhendo === 'reuniao' && !reuniao;
+  const lista = reuniao
+    ? (foto.processos || []).filter((p) => !p.encerrado && (!q || semAcento([p.apelido, p.numero, p.cliente, p.tribunal].join(' ')).includes(q)))
+    : (foto.clientes || []).filter((c) => !q || semAcento(c.nome).includes(q) || (digitos && String(c.telefone || '').replace(/\D/g, '').includes(digitos)));
+  const linhas = reuniao
+    ? lista.slice(0, 60).map((p) => `<div class="card" data-esc="${esc(p.id)}"><div class="linha"><div><div class="t">${esc(p.apelido)}</div><div class="m">${esc(p.cliente)}${p.numero ? ' · ' + esc(p.numero) : ''}</div></div><div class="m">›</div></div></div>`)
+    : lista.slice(0, 60).map((c) => `<div class="card" data-esc="${esc(c.id)}"><div class="linha"><div><div class="t">${esc(c.nome)}</div><div class="m">${esc(c.telefone || 'sem telefone')}</div></div><div class="m">›</div></div></div>`);
+  return `<div class="acoes"><button class="b" id="esc-voltar">‹ Voltar</button></div>
+  <h2>${reuniao ? 'Reunião de qual processo?' : reuniaoCliente ? 'Reunião com qual ' + esc(cliente.toLowerCase()) + '?' : esc(termos.atendimento_um || 'Consulta') + ' de qual ' + esc(cliente.toLowerCase()) + '?'}</h2>
+  <input id="busca-esc" placeholder="${reuniao ? 'Buscar por número, parte ou tribunal' : 'Buscar pelo nome ou telefone'}" value="${esc(buscaEsc)}">
+  ${linhas.join('') || `<div class="vazio">${reuniao ? 'Nenhum processo em andamento encontrado.' : 'Ninguém encontrado.'}</div>`}
+  ${lista.length > 60 ? `<div class="vazio">Mostrando 60 de ${lista.length}. Use a busca para achar os outros.</div>` : ''}`;
+}
+
+function formReuniao(p) {
+  const porProcesso = reuniaoDeProcesso();
+  return `<div class="acoes"><button class="b" id="reu-voltar">‹ ${esc(porProcesso ? p.apelido : p.nome)}</button></div>
+  <h2>Nova reunião</h2>
+  <div class="m">${esc(porProcesso ? [p.cliente, p.numero].filter(Boolean).join(' · ') : (p.telefone || ''))}</div>
+  <div class="m">${porProcesso ? 'Fica registrada no processo, no computador, quando o Dudoo Lite abrir. A pauta e o cronômetro ao vivo ficam no computador.' : 'Fica salva como nota da categoria Reunião, ligada ao cadastro, no computador e no celular quando o Dudoo Lite abrir.'}</div>
+  <input id="reu-titulo" placeholder="Título da reunião (ex.: Alinhamento com o cliente)" aria-label="Título da reunião">
+  <textarea id="reu-anot" rows="8" placeholder="Anotações da reunião" aria-label="Anotações da reunião"></textarea>
+  <div class="acoes"><button class="b p" id="reu-salvar">Salvar reunião</button><button class="b" id="reu-cancelar">Cancelar</button></div>`;
+}
+
 function telaHoje() {
+  if (novaReuniao) { const p = (reuniaoDeProcesso() ? (foto.processos || []) : (foto.clientes || [])).find((x) => x.id === novaReuniao); if (p) return formReuniao(p); novaReuniao = null; }
+  if (escolhendo) return telaEscolher();
   const hoje = foto.hoje, ag = (foto.agenda || []).filter((e) => e.data === hoje);
   const fin = foto.financeiro || { receber: [], pagar: [] };
   const venc = fin.receber.filter((c) => c.situacao === 'Vencido').length + fin.pagar.filter((c) => c.situacao === 'Vencido').length;
@@ -156,7 +207,8 @@ function telaHoje() {
   if (fu) precisa.push(`${fu} follow-up(s) de lead hoje`);
   const atras = tarefas.filter((t) => t.prazo && t.prazo <= hoje).length;
   if (atras) precisa.push(`${atras} tarefa(s) com prazo vencido ou para hoje`);
-  return `<h2>Precisa de você</h2>${precisa.length ? precisa.map((p) => `<div class="card">${esc(p)}</div>`).join('') : '<div class="vazio">Nada urgente.</div>'}
+  const iniciar = botoesIniciar();
+  return `${iniciar ? `<div class="acoes">${iniciar}</div>` : ''}<h2>Precisa de você</h2>${precisa.length ? precisa.map((p) => `<div class="card">${esc(p)}</div>`).join('') : '<div class="vazio">Nada urgente.</div>'}
   <h2>Hoje na agenda</h2>${ag.length ? ag.map(cardAgenda).join('') : '<div class="vazio">Nenhum compromisso hoje.</div>'}
   <h2>Tarefas</h2>${tarefas.length ? tarefas.map(cardTarefa).join('') : '<div class="vazio">Nenhuma tarefa pendente.</div>'}
   <div class="acoes"><button class="b" id="nova-tarefa">+ Nova tarefa</button></div>`;
@@ -329,11 +381,33 @@ function telaLeads() {
   return voltar + bloco('Follow-up hoje', L.followups_hoje, false) + bloco('Novos sem contato', L.novos_sem_contato, true) + bloco('Parados', L.sem_movimentacao, true);
 }
 
+// "O que você fez por aqui" (23/11/2026, Eduardo: a lista com o nome técnico do pedido ninguém entende): cada pedido em palavras simples, com o paciente quando se sabe,
+// e o estado dito por extenso — já está no computador, esperando o computador abrir, ou não foi aplicado (e por quê).
+const NOME_PEDIDO = {
+  registrar_consulta: 'Consulta', editar_consulta: 'Edição de consulta', enviar_foto_cliente: 'Foto de paciente', registrar_reuniao: 'Reunião',
+  criar_tarefa: 'Nova tarefa', concluir_tarefa: 'Tarefa concluída', criar_nota: 'Nova nota', editar_nota: 'Nota editada', excluir_nota: 'Nota excluída',
+  baixa_receber: 'Recebimento marcado', baixa_pagar: 'Pagamento marcado', desfazer_baixa_receber: 'Recebimento desfeito', desfazer_baixa_pagar: 'Pagamento desfeito',
+  criar_conta_receber: 'Nova conta a receber', criar_conta_pagar: 'Nova conta a pagar', registrar_contato_lead: 'Contato com lead', concluir_followup_lead: 'Follow-up concluído',
+  lancar_atendimento: 'Atendimento lançado', marcar_atendido: 'Atendimento marcado como feito',
+};
+const ESTADO_PEDIDO = { aplicado: ['Já está no computador', 'ok'], pendente: ['Esperando o computador abrir', ''], erro: ['O computador não aplicou', 'vencido'] };
+function blocoPedidos(ped) {
+  const titulo = '<h2>O que você fez por aqui</h2><div class="m">Tudo o que foi enviado pelo celular. Entra no computador quando o Dudoo Lite está aberto.</div>';
+  if (!ped.length) return titulo + '<div class="vazio">Nada enviado ainda.</div>';
+  const linhas = ped.map((c) => {
+    const local = consultasLocais.find((x) => x.cmd === c.id), cli = local && (foto.clientes || []).find((x) => x.id === local.cliente_id);
+    const detalhe = local ? [cli && cli.nome, local.servico].filter(Boolean).join(' · ') : '';
+    const [texto, cor] = ESTADO_PEDIDO[c.status] || [String(c.status || ''), ''];
+    return `<div class="card"><div class="linha"><div><div class="t">${esc(NOME_PEDIDO[c.tipo] || String(c.tipo || '').replace(/_/g, ' '))}</div>${detalhe ? `<div class="m">${esc(detalhe)}</div>` : ''}</div><div class="m ${cor}" style="text-align:right">${texto}</div></div>${c.erro ? `<div class="m vencido">${esc(c.erro)}</div>` : ''}</div>`;
+  }).join('');
+  return titulo + linhas;
+}
+
 function telaMais() {
   const ped = comandos.slice().reverse().slice(0, 8);
   const L = foto.leads, fu = L ? L.followups_hoje.length : 0, novos = L ? L.novos_sem_contato.length : 0;
   const leads = ((foto.modulos || []).includes('comercial')) ? `<div class="card" data-aba="leads"><div class="linha"><div><div class="t">Leads</div><div class="m">${fu} follow-up(s) hoje · ${novos} novo(s) sem contato</div></div><div class="m">›</div></div></div>` : '';
-  return `${leads}<h2>Pedidos enviados ao computador</h2>${ped.length ? ped.map((c) => `<div class="card"><div class="linha"><div class="t">${esc(c.tipo.replace(/_/g, ' '))}</div><div class="m ${c.status === 'erro' ? 'vencido' : c.status === 'aplicado' ? 'ok' : ''}">${esc(c.status)}</div></div>${c.erro ? `<div class="m">${esc(c.erro)}</div>` : ''}</div>`).join('') : '<div class="vazio">Nenhum.</div>'}
+  return `${leads}${blocoPedidos(ped)}
   <h2>Conexão</h2><div class="card"><div class="m">Os dados vêm do Dudoo Lite do computador: ele envia ao abrir, a cada 5 minutos e ao fechar. Se estiver desligado, o celular mostra o último envio. Prontuário e documentos não passam por aqui.</div>
   <div class="acoes"><button class="b" id="desconectar">Desconectar este celular</button></div></div>`;
 }
@@ -411,36 +485,72 @@ function consultaDetalhe(c, a) {
   ${k.campos.map(([r, t]) => bloco(r, esc(t))).join('')}
   ${k.listas.map(([r, l]) => bloco(r, l.map((x) => '• ' + esc(x)).join('\n'))).join('')}
   ${k.medidas.length ? bloco('Medidas', k.medidas.map(([r, v]) => esc(r) + ': ' + esc(v)).join('\n')) : ''}
-  <div class="m" style="margin-top:8px">Somente leitura. Texto resumido; o registro completo, as fotos e os documentos ficam no computador.</div>`;
+  <div class="m" style="margin-top:8px">${typeof k.obs_bruta === 'string' && foto.consulta_celular ? '' : 'Somente leitura. '}Texto resumido; o registro completo, as fotos e os documentos ficam no computador.</div>
+  ${typeof k.obs_bruta === 'string' && foto.consulta_celular ? (editandoCons
+    ? `<textarea id="cons-obs-edit" rows="7" aria-label="Observações da consulta">${esc(k.obs_bruta)}</textarea><div class="acoes"><button class="b p" id="cons-obs-salvar">Salvar</button><button class="b" id="cons-obs-cancelar">Cancelar</button></div>`
+    : '<div class="acoes"><button class="b" id="cons-obs-editar">Editar observações</button></div>') : ''}`;
 }
 
+let aguardAberta = null, editandoCons = false;   // consulta aguardando o computador aberta / edição das observações de uma consulta
 let novaCons = null;   // id do cadastro com a consulta nova aberta (formulário), só saúde
 let consFotos = [];    // fotos anexadas à consulta em andamento (arquivos escolhidos; reduzidas só no envio)
 const MAX_FOTOS_CONSULTA = 8;
 
+const NOME_AVULSO = 'Atendimento avulso';
+
+// Consulta no celular, enxuta (17/11/2026): procedimento (ou atendimento avulso, sem serviço), data, UM campo para o que foi falado e fotos.
+// Os campos clínicos completos, as medidas e os indicadores ficam no computador.
 function formConsulta(c) {
   const K = foto.consulta_celular || { campos: [], medidas: [], servicos: [] }, hoje = foto.hoje;
   return `<div class="acoes"><button class="b" id="cons-nova-voltar">‹ ${esc(c.nome)}</button></div>
   <h2>Nova consulta</h2>
   <div class="m">Fica salva no celular e no computador quando o Dudoo Lite abrir.</div>
-  <select id="cn-servico" aria-label="Procedimento">${K.servicos.map((v) => `<option value="${esc(v.id)}">${esc(v.nome)}</option>`).join('')}</select>
+  <label class="m" for="cn-servico">Motivo / procedimento</label>
+  <select id="cn-servico" aria-label="Motivo da consulta"><option value="">${NOME_AVULSO} (sem serviço)</option>${K.servicos.map((v) => `<option value="${esc(v.id)}">${esc(v.nome)}</option>`).join('')}</select>
+  <label class="m" for="cn-data">Data</label>
   <input id="cn-data" type="date" value="${esc(hoje)}" aria-label="Data">
-  <textarea id="cn-obs" rows="2" placeholder="Observações do atendimento"></textarea>
+  <textarea id="cn-obs" rows="7" placeholder="O que foi falado na sessão" aria-label="O que foi falado na sessão"></textarea>
   <div class="acoes"><button class="b" id="cn-fotos-btn">Anexar fotos</button><input type="file" id="cn-fotos-arq" accept="image/*" multiple hidden></div>
   <div class="m" id="cn-fotos-info">${consFotos.length ? consFotos.length + ' foto(s) anexada(s)' : 'Nenhuma foto anexada.'} As fotos enviadas pelo celular chegam com qualidade reduzida; para manter a original, coloque direto no Dudoo Lite do computador.</div>
-  ${K.campos.map(([k, r]) => `<textarea data-cn-campo="${esc(k)}" rows="3" placeholder="${esc(r)}" aria-label="${esc(r)}"></textarea>`).join('')}
-  ${K.medidas.length ? '<h2>Medidas</h2>' + K.medidas.map(([k, r, u]) => `<input data-cn-medida="${esc(k)}" placeholder="${esc(r)}${u ? ' (' + esc(u) + ')' : ''}" inputmode="decimal" aria-label="${esc(r)}">`).join('') : ''}
   <div class="acoes"><button class="b p" id="cn-salvar">Salvar consulta</button><button class="b" id="cn-cancelar">Cancelar</button></div>`;
+}
+
+// As consultas deste paciente que o celular mandou e o computador ainda não aplicou (ou recusou). Aplicada: some daqui, porque já está na lista do computador.
+function consultasAguardando(clienteId) {
+  const saida = [], antes = consultasLocais.length;
+  consultasLocais = consultasLocais.filter((x) => {
+    if (!x.cmd) return true;                                   // ainda na fila do celular (sem internet)
+    const c = comandos.find((k) => k.id === x.cmd);
+    const cli = (foto.clientes || []).find((k) => k.id === x.cliente_id), jaNaLista = !!(cli && cli.ficha && cli.ficha.total > (x.antes || 0));   // a consulta já está na lista que veio do computador
+    if (c && c.status === 'erro') return true;                    // o computador recusou: continua aparecendo, com o motivo
+    if (jaNaLista) return false;
+    return Date.now() - (x.quando || 0) < 7 * 86400000;           // aplicada ou não, fica visível até aparecer na lista do computador
+  });
+  if (consultasLocais.length !== antes) gravarChave(CHAVE_CONSULTAS, consultasLocais);
+  consultasLocais.filter((x) => x.cliente_id === clienteId).forEach((x) => {
+    const c = x.cmd ? comandos.find((k) => k.id === x.cmd) : null;
+    saida.push({ ...x, erro: c && c.status === 'erro' ? (c.erro || 'erro') : '' });
+  });
+  return saida.reverse();
 }
 
 function fichaCliente(c) {
   if (novaCons === c.id && foto.consulta_celular) return formConsulta(c);
   novaCons = null;
+  if (aguardAberta) {          // consulta já feita no celular, ainda esperando o computador: dá pra abrir e ler o que foi escrito
+    const x = consultasLocais.find((k) => k.lote === aguardAberta);
+    if (x) return `<div class="acoes"><button class="b" id="aguard-voltar">‹ ${esc(c.nome)}</button></div>
+  <h2>${esc(x.servico || 'Consulta')}</h2><div class="m">${dataLonga(x.data)} · aguardando o computador</div>
+  <div class="card"><div class="m">Observações</div><div class="t" style="white-space:pre-wrap;font-weight:400">${esc(x.obs || '(só fotos)')}</div></div>
+  <div class="m" style="margin-top:8px">Quando o Dudoo Lite abrir no computador ela entra na lista de consultas e aí dá para editar por aqui.</div>`;
+    aguardAberta = null;
+  }
   if (consAberta) { const a = c.ficha && c.ficha.atendimentos.find((x) => x.id === consAberta && x.clinico); if (a) return consultaDetalhe(c, a); consAberta = null; }
   const termos = foto.termos || {}, f = c.ficha, zap = foneLink(c.telefone), tel = String(c.telefone || '').replace(/\D/g, '');
   const linha = (r, v) => (v ? `<div class="linha"><div class="m">${r}</div><div class="t" style="text-align:right">${esc(v)}</div></div>` : '');
   const proximos = (foto.agenda || []).filter((e) => e.cliente_id === c.id && e.data >= foto.hoje);
-  const atendimentos = f ? (f.atendimentos.length ? f.atendimentos.map((a) => `<div class="linha"${a.clinico ? ` data-cons="${esc(a.id)}" style="cursor:pointer"` : ''}><div><div class="t">${esc(a.servico || 'Atendimento')}</div><div class="m">${dataLonga(a.data)}${a.hora ? ' às ' + esc(a.hora) : ''}${a.clinico ? ' · ver registro' : ''}</div></div>${a.clinico ? '<div class="m">›</div>' : ''}</div>`).join('<hr>') : '<div class="vazio">Nenhum atendimento lançado.</div>')
+  const aguardando = consultasAguardando(c.id).map((x) => `<div class="linha" data-aguard="${esc(x.lote)}" style="cursor:pointer"><div><div class="t">${esc(x.servico || 'Consulta')}</div><div class="m ${x.erro ? 'vencido' : ''}">${dataLonga(x.data)} · ${x.erro ? 'o computador não aplicou: ' + esc(x.erro) : 'aguardando o computador'}</div></div></div>`).join('<hr>');
+  const atendimentos = f ? (aguardando ? aguardando + (f.atendimentos.length ? '<hr>' : '') : '') + (f.atendimentos.length ? f.atendimentos.map((a) => `<div class="linha"${a.clinico ? ` data-cons="${esc(a.id)}" style="cursor:pointer"` : ''}><div><div class="t">${esc(a.servico || 'Atendimento')}</div><div class="m">${dataLonga(a.data)}${a.hora ? ' às ' + esc(a.hora) : ''}${a.clinico ? ' · ver registro' : ''}</div></div>${a.clinico ? '<div class="m">›</div>' : ''}</div>`).join('<hr>') : (aguardando ? '' : '<div class="vazio">Nenhum atendimento lançado.</div>'))
     : '<div class="vazio">O histórico deste cadastro está no computador (o celular guarda o dos mais recentes).</div>';
   return `<div class="acoes"><button class="b" id="cad-voltar">‹ ${esc(termos.cliente || 'Cadastros')}</button></div>
   <h2>${esc(c.nome)}${c.status && c.status !== 'Ativo' ? `<span class="pill">${esc(c.status)}</span>` : ''}</h2>
@@ -620,7 +730,7 @@ function telaLancarAvulso() {
 
 function telaMaisAtendente() {
   const ped = comandos.slice().reverse().slice(0, 8);
-  return `<h2>Pedidos enviados ao computador</h2>${ped.length ? ped.map((c) => `<div class="card"><div class="linha"><div class="t">${esc(c.tipo.replace(/_/g, ' '))}</div><div class="m ${c.status === 'erro' ? 'vencido' : c.status === 'aplicado' ? 'ok' : ''}">${esc(c.status)}</div></div>${c.erro ? `<div class="m">${esc(c.erro)}</div>` : ''}</div>`).join('') : '<div class="vazio">Nenhum.</div>'}
+  return `${blocoPedidos(ped)}
   <h2>Conexão</h2><div class="card"><div class="m">Este acesso mostra só o que foi liberado para você (agenda, lançamento e o seu mês). O computador aplica o que você enviar quando o Dudoo Lite estiver aberto; se estiver fechado, o pedido espera na fila.</div>
   <div class="acoes"><button class="b" id="desconectar">Desconectar este celular</button></div></div>`;
 }
@@ -723,6 +833,26 @@ function ligar() {
   const cv = $('#cad-voltar'); if (cv) cv.onclick = () => { cadAberto = null; consAberta = null; desenhar(); };
   const bf = $('#cad-foto'), af = $('#cad-foto-arq');
   if (bf && af) { bf.onclick = () => af.click(); af.onchange = () => { const a = af.files && af.files[0]; af.value = ''; enviarFotoCliente(cadAberto, a); }; }
+  const ic = $('#iniciar-consulta'); if (ic) ic.onclick = () => { escolhendo = 'consulta'; buscaEsc = ''; desenhar(); window.scrollTo(0, 0); };
+  const ir = $('#iniciar-reuniao'); if (ir) ir.onclick = () => { escolhendo = 'reuniao'; buscaEsc = ''; desenhar(); window.scrollTo(0, 0); };
+  const be = $('#busca-esc'); if (be) be.oninput = () => { buscaEsc = be.value; const pos = be.selectionStart; desenhar(); const n = $('#busca-esc'); n.focus(); n.setSelectionRange(pos, pos); };
+  const ev = $('#esc-voltar'); if (ev) ev.onclick = () => { escolhendo = null; buscaEsc = ''; desenhar(); };
+  document.querySelectorAll('[data-esc]').forEach((c) => { c.onclick = () => {
+    const id = c.dataset.esc, tipo = escolhendo; escolhendo = null; buscaEsc = '';
+    if (tipo === 'reuniao') { novaReuniao = id; desenhar(); } else { aba = 'cadastros'; cadAberto = id; consAberta = null; novaCons = id; desenhar(); }   // consulta: abre o formulário já no paciente escolhido
+    window.scrollTo(0, 0);
+  }; });
+  const rv = $('#reu-voltar'), rc = $('#reu-cancelar'); if (rv) rv.onclick = () => { novaReuniao = null; desenhar(); }; if (rc) rc.onclick = () => { novaReuniao = null; desenhar(); };
+  const rs = $('#reu-salvar'); if (rs) rs.onclick = async () => {
+    const anot = $('#reu-anot').value.trim();
+    if (!anot) { toast('Escreva as anotações da reunião.'); return; }
+    rs.disabled = true;
+    const porProcesso = reuniaoDeProcesso(), titulo = $('#reu-titulo').value.trim();
+    const ok = await enviar('registrar_reuniao', porProcesso ? { processo_id: novaReuniao, titulo, anotacoes: anot } : { cliente_id: novaReuniao, titulo, anotacoes: anot },
+      porProcesso ? 'Reunião guardada. Entra no processo quando o Dudoo Lite abrir.' : 'Reunião guardada. Entra nas notas quando o Dudoo Lite abrir.');
+    if (ok) novaReuniao = null; else rs.disabled = false;
+    desenhar();
+  };
   const bco = $('#cad-consulta'); if (bco) bco.onclick = () => { novaCons = cadAberto; desenhar(); window.scrollTo(0, 0); };
   const cnv = $('#cons-nova-voltar'); if (cnv) cnv.onclick = () => { novaCons = null; consFotos = []; desenhar(); };
   const cnc = $('#cn-cancelar'); if (cnc) cnc.onclick = () => { novaCons = null; consFotos = []; desenhar(); };
@@ -735,16 +865,17 @@ function ligar() {
     };
   }
   const cns = $('#cn-salvar'); if (cns) cns.onclick = async () => {
-    const campos = {}, medidas = {};
-    document.querySelectorAll('[data-cn-campo]').forEach((e) => { campos[e.dataset.cnCampo] = e.value.trim(); });
-    document.querySelectorAll('[data-cn-medida]').forEach((e) => { medidas[e.dataset.cnMedida] = e.value.trim(); });
     const obs = $('#cn-obs').value.trim();
-    if (!obs && !Object.values(campos).some(Boolean) && !Object.values(medidas).some(Boolean)) { toast('Escreva algo na consulta.'); return; }
+    if (!obs && !consFotos.length) { toast('Escreva o que foi falado ou anexe uma foto.'); return; }
     cns.disabled = true;
     const lote = Math.random().toString(16).slice(2, 12) + Date.now().toString(16), clienteId = cadAberto, anexos = consFotos.slice();
-    const ok = await enviar('registrar_consulta', { cliente_id: clienteId, servico_id: $('#cn-servico').value, data: $('#cn-data').value || foto.hoje, observacoes: obs, campos, medidas, lote },
+    const sel = $('#cn-servico'), servicoId = sel ? sel.value : '', nomeServico = servicoId && sel.options && sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : NOME_AVULSO, dataConsulta = $('#cn-data').value || foto.hoje;
+    const ok = await enviar('registrar_consulta', { cliente_id: clienteId, servico_id: servicoId, data: dataConsulta, observacoes: obs, lote },
       'Consulta guardada. Entra no computador quando o Dudoo Lite abrir.');
     if (ok) {
+      const fi = (foto.clientes || []).find((x) => x.id === clienteId);
+      consultasLocais.push({ lote, cmd: ultimoPedido, cliente_id: clienteId, servico: nomeServico, data: dataConsulta, obs, antes: (fi && fi.ficha ? fi.ficha.total : 0), quando: Date.now() });
+      gravarChave(CHAVE_CONSULTAS, consultasLocais);
       novaCons = null; consFotos = [];
       if (anexos.length) {
         toast('Enviando ' + anexos.length + ' foto(s) da consulta…');
@@ -757,7 +888,22 @@ function ligar() {
     desenhar();
   };
   document.querySelectorAll('[data-cons]').forEach((l) => { l.onclick = () => { consAberta = l.dataset.cons; desenhar(); window.scrollTo(0, 0); }; });
-  const kv = $('#cons-voltar'); if (kv) kv.onclick = () => { consAberta = null; desenhar(); };
+  document.querySelectorAll('[data-aguard]').forEach((l) => { l.onclick = () => { aguardAberta = l.dataset.aguard; desenhar(); window.scrollTo(0, 0); }; });
+  const av = $('#aguard-voltar'); if (av) av.onclick = () => { aguardAberta = null; desenhar(); };
+  const kv = $('#cons-voltar'); if (kv) kv.onclick = () => { consAberta = null; editandoCons = false; desenhar(); };
+  const coe = $('#cons-obs-editar'); if (coe) coe.onclick = () => { editandoCons = true; desenhar(); };
+  const coc = $('#cons-obs-cancelar'); if (coc) coc.onclick = () => { editandoCons = false; desenhar(); };
+  const cos = $('#cons-obs-salvar'); if (cos) cos.onclick = async () => {
+    const texto = $('#cons-obs-edit').value.trim(), cli = (foto.clientes || []).find((x) => x.id === cadAberto);
+    const at = cli && cli.ficha && cli.ficha.atendimentos.find((x) => x.id === consAberta);
+    if (!at || !at.clinico) return;
+    cos.disabled = true;
+    const base = at.clinico.obs_bruta, antes = { obs: at.clinico.obs, bruta: at.clinico.obs_bruta };
+    at.clinico.obs = texto; at.clinico.obs_bruta = texto; guardar({ conexao, foto, comandos, overlay });     // já aparece editada; a foto nova do computador confirma
+    editandoCons = false;
+    if (!(await enviar('editar_consulta', { id: consAberta, observacoes: texto, base }, 'Edição guardada. Entra no computador quando o Dudoo Lite abrir.'))) { at.clinico.obs = antes.obs; at.clinico.obs_bruta = antes.bruta; guardar({ conexao, foto, comandos, overlay }); }
+    desenhar();
+  };
   const bn = $('#busca-nota'); if (bn) bn.oninput = () => { buscaNota = bn.value; const pos = bn.selectionStart; desenhar(); const n = $('#busca-nota'); n.focus(); n.setSelectionRange(pos, pos); };
   const cn = $('#cat-nota'); if (cn) cn.onchange = () => { catNota = cn.value; desenhar(); };
   const ln = $('#cli-nota'); if (ln) ln.onchange = () => { cliNota = ln.value; desenhar(); };
@@ -774,7 +920,14 @@ function ligar() {
   const dc = $('#desconectar'); if (dc) dc.onclick = () => { guardar({}); conexao = foto = null; desenhar(); };
 }
 
-document.addEventListener('click', (e) => { const b = e.target.closest('[data-aba]'); if (b) { aba = b.dataset.aba; lanc = null; desenhar(); window.scrollTo(0, 0); } });
+// Tocar numa aba (também na que já está aberta) volta para a tela inicial dela (17/11/2026, Eduardo): fecha a ficha, a consulta, o processo, a nota
+// e a escolha do "Iniciar" que estavam abertas por dentro.
+function irParaAba(k) {
+  aba = k; lanc = null; escolhendo = null; novaReuniao = null;
+  cadAberto = null; consAberta = null; novaCons = null; consFotos = []; procAberto = null; notaAberta = null; rascunho = null;
+  desenhar(); window.scrollTo(0, 0);
+}
+document.addEventListener('click', (e) => { const b = e.target.closest('[data-aba]'); if (b) irParaAba(b.dataset.aba); });
 $('#btn-atualizar').onclick = () => atualizar(false);
 window.addEventListener('online', () => atualizar(true));
 document.addEventListener('visibilitychange', () => { if (document.hidden) pessoalLiberado = false; else atualizar(true); });
