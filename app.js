@@ -16,7 +16,7 @@ const CHAVE_FILA = 'dudoo-lite-web-fila';
 let fila = lerChave(CHAVE_FILA) || [];
 // Consultas registradas por aqui e ainda não confirmadas pelo computador (17/11/2026, Eduardo: "adicionei uma consulta mas não apareceu na lista"): ficam na lista
 // do paciente como "aguardando o computador" até o Dudoo Lite aplicar. {lote, cmd (id do pedido; vazio se ainda está na fila sem internet), cliente_id, servico, data, quando}
-const VERSAO_WEB = '20';   // igual ao número do CACHE em service-worker.js: aparece na aba Mais
+const VERSAO_WEB = '21';   // igual ao número do CACHE em service-worker.js: aparece na aba Mais
 const CHAVE_CONSULTAS = 'dudoo-lite-web-consultas';
 let consultasLocais = (lerChave(CHAVE_CONSULTAS) || []).filter((c) => Date.now() - (c.quando || 0) < 7 * 86400000);
 let ultimoPedido = '';   // id do último pedido aceito pelo servidor (vazio se ficou na fila sem internet)
@@ -274,7 +274,7 @@ function cartaoConta(i, receber, escopo) {
 }
 
 function bloqueioPessoal() {
-  return `<div class="card"><div class="t">Financeiro pessoal protegido</div><div class="m">Libere com a biometria do celular (ou um PIN) para ver.</div>
+  return `<div class="card"><div class="t">Financeiro protegido</div><div class="m">Libere com Face ID / digital do celular (ou um PIN) para ver os valores.</div>
     <div class="acoes"><button class="b p" id="liberar-pessoal">Liberar</button></div></div>`;
 }
 
@@ -284,7 +284,7 @@ function telaContas() {
   const meses = F.meses, mes = meses.includes(finMes) ? finMes : (meses.includes(F.mes_atual) ? F.mes_atual : meses[0]);
   finMes = mes;
   const escopoSeg = temPessoal ? `<div class="seg"><button class="b ${finEscopo === 'empresa' ? 'p' : ''}" data-escopo="empresa">${esc(foto.negocio || 'Empresa')}</button><button class="b ${finEscopo === 'pessoal' ? 'p' : ''}" data-escopo="pessoal">Pessoal</button></div>` : '';
-  if (finEscopo === 'pessoal' && !pessoalLiberado) return `<h2>Financeiro</h2>${escopoSeg}${bloqueioPessoal()}`;
+  if (!pessoalLiberado) return `<h2>Financeiro</h2>${bloqueioPessoal()}`;      // 23/11/2026: o Financeiro todo (empresa e pessoal) pede Face ID/digital ou PIN, como no Dudoo Arq
   const por = F[finEscopo].por_mes, dm = por[mes] || { a_receber: [], a_pagar: [] }, idx = meses.indexOf(mes);
   const soma = (l, f) => l.filter(f).reduce((t, x) => t + x.valor, 0);
   const aberta = (x) => !fechadaAgora(x), feita = (x) => fechadaAgora(x);
@@ -337,14 +337,14 @@ async function desbloquearBiometria() {
 }
 async function pedirPin() {
   const guardado = lerChave(CHAVE_PIN);
-  const digitado = window.prompt(guardado ? 'PIN do financeiro pessoal' : 'Crie um PIN (4 a 6 números) para o financeiro pessoal');
+  const digitado = window.prompt(guardado ? 'PIN do financeiro' : 'Crie um PIN (4 a 6 números) para o financeiro');
   if (!digitado) return false;
   const h = await hashPin(digitado);
   if (!guardado) { if (!/^\d{4,6}$/.test(digitado)) { toast('Use de 4 a 6 números.'); return false; } gravarChave(CHAVE_PIN, h); return true; }
   return h === guardado;
 }
 async function liberarPessoal() {
-  if ((await desbloquearBiometria()) || (await pedirPin())) { pessoalLiberado = true; desenhar(); } else toast('Não foi possível liberar o financeiro pessoal.');
+  if ((await desbloquearBiometria()) || (await pedirPin())) { pessoalLiberado = true; desenhar(); } else toast('Não foi possível liberar o financeiro.');
 }
 
 function novaConta() {
