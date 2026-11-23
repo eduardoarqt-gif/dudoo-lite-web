@@ -16,7 +16,7 @@ const CHAVE_FILA = 'dudoo-lite-web-fila';
 let fila = lerChave(CHAVE_FILA) || [];
 // Consultas registradas por aqui e ainda não confirmadas pelo computador (17/11/2026, Eduardo: "adicionei uma consulta mas não apareceu na lista"): ficam na lista
 // do paciente como "aguardando o computador" até o Dudoo Lite aplicar. {lote, cmd (id do pedido; vazio se ainda está na fila sem internet), cliente_id, servico, data, quando}
-const VERSAO_WEB = '22';   // igual ao número do CACHE em service-worker.js: aparece na aba Mais
+const VERSAO_WEB = '23';   // igual ao número do CACHE em service-worker.js: aparece na aba Mais
 const CHAVE_CONSULTAS = 'dudoo-lite-web-consultas';
 let consultasLocais = (lerChave(CHAVE_CONSULTAS) || []).filter((c) => Date.now() - (c.quando || 0) < 7 * 86400000);
 let ultimoPedido = '';   // id do último pedido aceito pelo servidor (vazio se ficou na fila sem internet)
@@ -932,7 +932,7 @@ function irParaAba(k) {
 document.addEventListener('click', (e) => { const b = e.target.closest('[data-aba]'); if (b) irParaAba(b.dataset.aba); });
 $('#btn-atualizar').onclick = () => { atualizar(false); if ('serviceWorker' in navigator) navigator.serviceWorker.getRegistration().then((r) => r && r.update()).catch(() => {}); };   // o botão também procura versão nova do app (recarrega sozinho se achar)
 window.addEventListener('online', () => atualizar(true));
-document.addEventListener('visibilitychange', () => { if (document.hidden) pessoalLiberado = false; else atualizar(true); });
+document.addEventListener('visibilitychange', () => { if (document.hidden) pessoalLiberado = false; else { atualizar(true); if ('serviceWorker' in navigator) navigator.serviceWorker.getRegistration().then((r) => r && r.update()).catch(() => {}); } });   // ao voltar para o app também procura versão nova
 if ('serviceWorker' in navigator) {
   const tinhaControle = !!navigator.serviceWorker.controller;      // só recarrega quando é ATUALIZAÇÃO (não na primeira instalação)
   navigator.serviceWorker.addEventListener('controllerchange', () => { if (tinhaControle) location.reload(); });
