@@ -16,6 +16,7 @@ const CHAVE_FILA = 'dudoo-lite-web-fila';
 let fila = lerChave(CHAVE_FILA) || [];
 // Consultas registradas por aqui e ainda não confirmadas pelo computador (17/11/2026, Eduardo: "adicionei uma consulta mas não apareceu na lista"): ficam na lista
 // do paciente como "aguardando o computador" até o Dudoo Lite aplicar. {lote, cmd (id do pedido; vazio se ainda está na fila sem internet), cliente_id, servico, data, quando}
+const VERSAO_WEB = '20';   // igual ao número do CACHE em service-worker.js: aparece na aba Mais
 const CHAVE_CONSULTAS = 'dudoo-lite-web-consultas';
 let consultasLocais = (lerChave(CHAVE_CONSULTAS) || []).filter((c) => Date.now() - (c.quando || 0) < 7 * 86400000);
 let ultimoPedido = '';   // id do último pedido aceito pelo servidor (vazio se ficou na fila sem internet)
@@ -409,6 +410,7 @@ function telaMais() {
   const leads = ((foto.modulos || []).includes('comercial')) ? `<div class="card" data-aba="leads"><div class="linha"><div><div class="t">Leads</div><div class="m">${fu} follow-up(s) hoje · ${novos} novo(s) sem contato</div></div><div class="m">›</div></div></div>` : '';
   return `${leads}${blocoPedidos(ped)}
   <h2>Conexão</h2><div class="card"><div class="m">Os dados vêm do Dudoo Lite do computador: ele envia ao abrir, a cada 5 minutos e ao fechar. Se estiver desligado, o celular mostra o último envio. Prontuário e documentos não passam por aqui.</div>
+  <div class="m" style="margin-top:8px">App do celular: versão ${VERSAO_WEB} · Dudoo Lite do computador: v${esc(foto.versao_app || '—')}</div>
   <div class="acoes"><button class="b" id="desconectar">Desconectar este celular</button></div></div>`;
 }
 
@@ -931,7 +933,11 @@ document.addEventListener('click', (e) => { const b = e.target.closest('[data-ab
 $('#btn-atualizar').onclick = () => atualizar(false);
 window.addEventListener('online', () => atualizar(true));
 document.addEventListener('visibilitychange', () => { if (document.hidden) pessoalLiberado = false; else atualizar(true); });
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('service-worker.js').catch(() => {});
+if ('serviceWorker' in navigator) {
+  const tinhaControle = !!navigator.serviceWorker.controller;      // só recarrega quando é ATUALIZAÇÃO (não na primeira instalação)
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (tinhaControle) location.reload(); });
+  navigator.serviceWorker.register('service-worker.js').then((r) => r.update()).catch(() => {});
+}
 
 (function iniciar() {
   const salvo = ler();
