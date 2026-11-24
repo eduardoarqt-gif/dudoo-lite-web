@@ -16,7 +16,7 @@ const CHAVE_FILA = 'dudoo-lite-web-fila';
 let fila = lerChave(CHAVE_FILA) || [];
 // Consultas registradas por aqui e ainda não confirmadas pelo computador (17/11/2026, Eduardo: "adicionei uma consulta mas não apareceu na lista"): ficam na lista
 // do paciente como "aguardando o computador" até o Dudoo Lite aplicar. {lote, cmd (id do pedido; vazio se ainda está na fila sem internet), cliente_id, servico, data, quando}
-const VERSAO_WEB = '24';   // igual ao número do CACHE em service-worker.js: aparece na aba Mais
+const VERSAO_WEB = '25';   // igual ao número do CACHE em service-worker.js: aparece na aba Mais
 const CHAVE_CONSULTAS = 'dudoo-lite-web-consultas';
 let consultasLocais = (lerChave(CHAVE_CONSULTAS) || []).filter((c) => Date.now() - (c.quando || 0) < 7 * 86400000);
 let ultimoPedido = '';   // id do último pedido aceito pelo servidor (vazio se ficou na fila sem internet)
@@ -415,13 +415,15 @@ function blocoNotificacoes() {
   if (!sit.suportado) return aviso('Este navegador não oferece notificações. No iPhone, use o app da Tela de Início (iOS 16.4 ou mais novo).');
   if (!sit.instalado) return aviso('Para receber avisos, adicione o Dudoo Lite à Tela de Início (Compartilhar → Adicionar à Tela de Início) e abra por lá.');
   if (!push.chave_publica) return aviso('O Dudoo Lite do computador ainda não preparou as notificações. Abra o programa (versão atualizada) e toque em Atualizar.');
-  if (!sit.inscrito) return `<div class="card"><div class="m">Receba aviso do atendimento que está chegando, contas, leads, tarefas e mais. Os avisos saem com o Dudoo Lite aberto no computador e nunca mostram nome de cliente, valores nem dados de saúde.</div><div class="acoes"><button class="b p" id="push-ativar">Ativar avisos</button></div></div>`;
+  // As escolhas (quais avisos receber e o silêncio) aparecem ANTES e depois de ativar: o usuário configura e ativa no mesmo lugar.
   const m = DudooPush.mesclar(push, prefPush());
   const linhas = (m.categorias || []).map((c) => `<div class="linha"><div class="t">${esc(c.rotulo)}</div><button class="b ${c.ligada ? 'p' : ''}" data-push-cat="${esc(c.id)}">${c.ligada ? 'Ligado' : 'Desligado'}</button></div>`).join('');
   const s = m.silencio || {};
-  return `<div class="card"><div class="m">Avisos ativos neste aparelho. A escolha vale depois que o Dudoo Lite do computador aplicar (até 5 min).</div>${linhas}
+  const escolhas = `<div class="m" style="margin-top:8px">Quais avisos receber:</div>${linhas}
     <div class="linha"><div class="t">Silêncio${s.ativo ? ` das ${esc(s.de)} às ${esc(s.ate)}` : ''}</div><button class="b ${s.ativo ? 'p' : ''}" id="push-silencio">${s.ativo ? 'Ligado' : 'Desligado'}</button></div>
-    ${s.ativo ? `<div class="linha"><input id="push-de" type="time" value="${esc(s.de || '22:00')}"><input id="push-ate" type="time" value="${esc(s.ate || '07:00')}"><button class="b" id="push-horario">Salvar</button></div>` : ''}
+    ${s.ativo ? `<div class="linha"><input id="push-de" type="time" value="${esc(s.de || '22:00')}"><input id="push-ate" type="time" value="${esc(s.ate || '07:00')}"><button class="b" id="push-horario">Salvar</button></div>` : ''}`;
+  if (!sit.inscrito) return `<div class="card"><div class="m">Receba aviso do atendimento que está chegando, contas, leads, tarefas e mais. Os avisos saem com o Dudoo Lite aberto no computador e nunca mostram nome de cliente, valores nem dados de saúde.</div>${escolhas}<div class="acoes"><button class="b p" id="push-ativar">Ativar avisos</button></div></div>`;
+  return `<div class="card"><div class="m">Avisos ativos neste aparelho. A escolha vale depois que o Dudoo Lite do computador aplicar (até 5 min).</div>${escolhas}
     <div class="acoes"><button class="b" id="push-desativar">Desativar neste aparelho</button></div></div>`;
 }
 function guardarPrefPush(parcial) {
@@ -870,6 +872,7 @@ function ligar() {
   document.querySelectorAll('[data-itens]').forEach((b) => { b.onclick = () => { itensAbertos[b.dataset.itens] = !itensAbertos[b.dataset.itens]; desenhar(); }; });
   document.querySelectorAll('[data-escopo]').forEach((b) => { if (!b.dataset.baixa && !b.dataset.desfaz) b.onclick = () => { finEscopo = b.dataset.escopo; desenhar(); }; });
   document.querySelectorAll('[data-mes]').forEach((b) => { b.onclick = () => { const m = financeiroDaFoto().meses, i = m.indexOf(finMes) + Number(b.dataset.mes); if (m[i]) { finMes = m[i]; desenhar(); } }; });
+  ligarNotificacoes();      // 24/11/2026: no modo normal o botão "Ativar avisos" não tinha clique ligado (só o modo atendente ligava)
   const lp = $('#liberar-pessoal'); if (lp) lp.onclick = liberarPessoal;
   document.querySelectorAll('[data-contato]').forEach((b) => { b.onclick = () => enviar('registrar_contato_lead', { id: b.dataset.contato }); });
   document.querySelectorAll('[data-followup]').forEach((b) => { b.onclick = () => enviar('concluir_followup_lead', { id: b.dataset.followup }); });
