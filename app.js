@@ -16,7 +16,7 @@ const CHAVE_FILA = 'dudoo-lite-web-fila';
 let fila = lerChave(CHAVE_FILA) || [];
 // Consultas registradas por aqui e ainda não confirmadas pelo computador (17/11/2026, Eduardo: "adicionei uma consulta mas não apareceu na lista"): ficam na lista
 // do paciente como "aguardando o computador" até o Dudoo Lite aplicar. {lote, cmd (id do pedido; vazio se ainda está na fila sem internet), cliente_id, servico, data, quando}
-const VERSAO_WEB = '23';   // igual ao número do CACHE em service-worker.js: aparece na aba Mais
+const VERSAO_WEB = '24';   // igual ao número do CACHE em service-worker.js: aparece na aba Mais
 const CHAVE_CONSULTAS = 'dudoo-lite-web-consultas';
 let consultasLocais = (lerChave(CHAVE_CONSULTAS) || []).filter((c) => Date.now() - (c.quando || 0) < 7 * 86400000);
 let ultimoPedido = '';   // id do último pedido aceito pelo servidor (vazio se ficou na fila sem internet)
@@ -404,11 +404,60 @@ function blocoPedidos(ped) {
   return titulo + linhas;
 }
 
+// Notificações push (24/11/2026): o motor e as categorias vêm do Dudoo Lite do computador (núcleo padrão); aqui só ativar/desativar e as preferências.
+const CHAVE_PUSH_PREF = 'dudoo-lite-web-push-pref';
+let pushSit = null;   // situação deste aparelho (suportado, instalado, inscrito)
+function prefPush() { return lerChave(CHAVE_PUSH_PREF) || { categorias: {}, silencio: {} }; }
+function blocoNotificacoes() {
+  const sit = pushSit || { suportado: false, instalado: false, inscrito: false };
+  const push = (foto && foto.push) || {};
+  const aviso = (t) => `<div class="card"><div class="m">${t}</div></div>`;
+  if (!sit.suportado) return aviso('Este navegador não oferece notificações. No iPhone, use o app da Tela de Início (iOS 16.4 ou mais novo).');
+  if (!sit.instalado) return aviso('Para receber avisos, adicione o Dudoo Lite à Tela de Início (Compartilhar → Adicionar à Tela de Início) e abra por lá.');
+  if (!push.chave_publica) return aviso('O Dudoo Lite do computador ainda não preparou as notificações. Abra o programa (versão atualizada) e toque em Atualizar.');
+  if (!sit.inscrito) return `<div class="card"><div class="m">Receba aviso do atendimento que está chegando, contas, leads, tarefas e mais. Os avisos saem com o Dudoo Lite aberto no computador e nunca mostram nome de cliente, valores nem dados de saúde.</div><div class="acoes"><button class="b p" id="push-ativar">Ativar avisos</button></div></div>`;
+  const m = DudooPush.mesclar(push, prefPush());
+  const linhas = (m.categorias || []).map((c) => `<div class="linha"><div class="t">${esc(c.rotulo)}</div><button class="b ${c.ligada ? 'p' : ''}" data-push-cat="${esc(c.id)}">${c.ligada ? 'Ligado' : 'Desligado'}</button></div>`).join('');
+  const s = m.silencio || {};
+  return `<div class="card"><div class="m">Avisos ativos neste aparelho. A escolha vale depois que o Dudoo Lite do computador aplicar (até 5 min).</div>${linhas}
+    <div class="linha"><div class="t">Silêncio${s.ativo ? ` das ${esc(s.de)} às ${esc(s.ate)}` : ''}</div><button class="b ${s.ativo ? 'p' : ''}" id="push-silencio">${s.ativo ? 'Ligado' : 'Desligado'}</button></div>
+    ${s.ativo ? `<div class="linha"><input id="push-de" type="time" value="${esc(s.de || '22:00')}"><input id="push-ate" type="time" value="${esc(s.ate || '07:00')}"><button class="b" id="push-horario">Salvar</button></div>` : ''}
+    <div class="acoes"><button class="b" id="push-desativar">Desativar neste aparelho</button></div></div>`;
+}
+function guardarPrefPush(parcial) {
+  const atual = prefPush();
+  gravarChave(CHAVE_PUSH_PREF, { categorias: { ...atual.categorias, ...(parcial.categorias || {}) }, silencio: { ...atual.silencio, ...(parcial.silencio || {}) } });
+  enviar('preferencias_push', parcial, 'Escolha guardada. Vale quando o Dudoo Lite do computador aplicar.');
+  desenhar();
+}
+function ligarNotificacoes() {
+  const q = (s) => document.querySelector(s);
+  document.querySelectorAll('[data-push-cat]').forEach((b) => { b.onclick = () => {
+    const id = b.dataset.pushCat, atual = DudooPush.mesclar((foto && foto.push) || {}, prefPush()).categorias.find((c) => c.id === id);
+    guardarPrefPush({ categorias: { [id]: !(atual && atual.ligada) } });
+  }; });
+  const ativar = q('#push-ativar'); if (ativar) ativar.onclick = async () => {
+    try {
+      const inscricao = await DudooPush.ativar(((foto && foto.push) || {}).chave_publica);
+      await enviar('registrar_push', { inscricao, aparelho: /iPhone|iPad/.test(navigator.userAgent) ? 'iPhone' : /Android/.test(navigator.userAgent) ? 'Android' : 'Celular' }, 'Avisos ativados. Valem quando o Dudoo Lite do computador aplicar.');
+      pushSit = await DudooPush.situacao(); desenhar();
+    } catch (e) { toast(e.message); }
+  };
+  const des = q('#push-desativar'); if (des) des.onclick = async () => {
+    const endpoint = await DudooPush.desativar();
+    if (endpoint) await enviar('remover_push', { endpoint }, 'Avisos desativados neste aparelho.');
+    pushSit = await DudooPush.situacao(); desenhar();
+  };
+  const sil = q('#push-silencio'); if (sil) sil.onclick = () => { const s = DudooPush.mesclar((foto && foto.push) || {}, prefPush()).silencio || {}; guardarPrefPush({ silencio: { ativo: !s.ativo } }); };
+  const hor = q('#push-horario'); if (hor) hor.onclick = () => guardarPrefPush({ silencio: { de: (q('#push-de') || {}).value || '22:00', ate: (q('#push-ate') || {}).value || '07:00' } });
+}
+
 function telaMais() {
   const ped = comandos.slice().reverse().slice(0, 8);
   const L = foto.leads, fu = L ? L.followups_hoje.length : 0, novos = L ? L.novos_sem_contato.length : 0;
   const leads = ((foto.modulos || []).includes('comercial')) ? `<div class="card" data-aba="leads"><div class="linha"><div><div class="t">Leads</div><div class="m">${fu} follow-up(s) hoje · ${novos} novo(s) sem contato</div></div><div class="m">›</div></div></div>` : '';
   return `${leads}${blocoPedidos(ped)}
+  <h2>Notificações</h2>${blocoNotificacoes()}
   <h2>Conexão</h2><div class="card"><div class="m">Os dados vêm do Dudoo Lite do computador: ele envia ao abrir, a cada 5 minutos e ao fechar. Se estiver desligado, o celular mostra o último envio. Prontuário e documentos não passam por aqui.</div>
   <div class="m" style="margin-top:8px">App do celular: versão ${VERSAO_WEB} · Dudoo Lite do computador: v${esc(foto.versao_app || '—')}</div>
   <div class="acoes"><button class="b" id="desconectar">Desconectar este celular</button></div></div>`;
@@ -790,6 +839,7 @@ function ligarAtendente() {
     if (!servico || !cli) { toast('Escolha o serviço.'); return; }
     abrirLancamento({ clienteId: cli.id, cliente: cli.nome, servicoId: servico.id, titulo: servico.nome, preco: servico.preco || 0 });
   };
+  ligarNotificacoes();
   const dc = $('#desconectar'); if (dc) dc.onclick = () => { guardar({}); conexao = foto = null; lanc = null; desenhar(); };
   if (!lanc || !$('#l-ok')) return;
   const P = foto.pagamento || { parceladas: [] }, forma = $('#l-forma'), parc = $('#l-parc');
@@ -943,6 +993,10 @@ if ('serviceWorker' in navigator) {
   const salvo = ler();
   if (salvo.conexao) { conexao = salvo.conexao; foto = salvo.foto || null; comandos = salvo.comandos || []; overlay = salvo.overlay || overlay; baixasLocais = salvo.baixasLocais || {}; }
   if (lerLinkDaUrl()) { foto = null; comandos = []; }
+  const abaPedida = new URLSearchParams(location.search).get('aba');                      // toque numa notificação com o app fechado
+  if (abaPedida) { aba = DudooPush.destino(abaPedida); history.replaceState(null, '', location.pathname); }
+  if ('serviceWorker' in navigator) navigator.serviceWorker.addEventListener('message', (ev) => { if (ev.data && ev.data.tipo === 'abrir-aba') irParaAba(DudooPush.destino(ev.data.aba)); });
+  DudooPush.situacao().then((s) => { pushSit = s; if (foto) desenhar(); }).catch(() => {});
   desenhar();
   atualizar(true);
 })();
